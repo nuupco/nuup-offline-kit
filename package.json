@@ -1,0 +1,45 @@
+{
+  "name": "@nuup/offline-kit",
+  "version": "0.1.0",
+  "description": "Offline-first toolkit for React Native/Expo apps: SQLite migrations, bidirectional sync engine, and query/store abstraction.",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./migrations": "./src/migrations/index.js",
+    "./adapters/expo-sqlite": "./src/adapters/expo-sqlite.js",
+    "./package.json": "./package.json",
+    "./*": [
+      "./src/*",
+      "./src/*.js",
+      "./src/*/index.js"
+    ]
+  },
+  "files": [
+    "src"
+  ],
+  "keywords": [
+    "react-native",
+    "expo",
+    "sqlite",
+    "offline-first",
+    "sync",
+    "migrations"
+  ],
+  "peerDependencies": {
+    "expo-sqlite": ">=13"
+  },
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "better-sqlite3": "^13.0.2",
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/__tests__/helpers/"
+    ]
+  }
+}
