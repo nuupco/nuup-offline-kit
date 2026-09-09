@@ -9,7 +9,7 @@ Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only
 From GitHub (no local build required):
 
 ```sh
-npm install github:nuup/offline-kit expo-sqlite
+npm install github:nuupco/nuup-offline-kit expo-sqlite
 ```
 
 Once published to npm:

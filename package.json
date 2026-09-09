@@ -48,8 +48,7 @@
     "build": "rimraf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "jest",
-    "verify:dist": "npm run build && git diff --exit-code -- dist",
-    "prepare": "npm run build"
+    "verify:dist": "npm run build && git diff --exit-code -- dist"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
