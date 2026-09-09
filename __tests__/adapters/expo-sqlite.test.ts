@@ -1,14 +1,14 @@
-const { createFakeExpoSqliteDb } = require('../helpers/fake-expo-sqlite');
+import { createFakeExpoSqliteDb } from '../helpers/fake-expo-sqlite';
 
-let fakeDbs;
+let fakeDbs: any[];
 
 jest.mock('expo-sqlite', () => ({
   openDatabaseSync: jest.fn(),
 }), { virtual: true });
 
 describe('createExpoSqliteAdapter', () => {
-  let createExpoSqliteAdapter;
-  let expoSqlite;
+  let createExpoSqliteAdapter: any;
+  let expoSqlite: any;
 
   beforeEach(() => {
     jest.resetModules();
@@ -66,7 +66,7 @@ describe('createExpoSqliteAdapter', () => {
   });
 
   describe('read/write dispatch', () => {
-    let adapter;
+    let adapter: any;
 
     beforeEach(async () => {
       const database = createFakeExpoSqliteDb();
@@ -109,7 +109,7 @@ describe('createExpoSqliteAdapter', () => {
   });
 
   describe('transaction lifecycle', () => {
-    let adapter;
+    let adapter: any;
 
     beforeEach(async () => {
       const database = createFakeExpoSqliteDb();
@@ -118,7 +118,7 @@ describe('createExpoSqliteAdapter', () => {
     });
 
     it('commits all writes on success and makes them visible afterwards', async () => {
-      await adapter.runInTransaction(async exec => {
+      await adapter.runInTransaction(async (exec: any) => {
         await exec('INSERT INTO users (name) VALUES (?)', ['alice']);
         await exec('INSERT INTO users (name) VALUES (?)', ['bob']);
       });
@@ -131,7 +131,7 @@ describe('createExpoSqliteAdapter', () => {
       const boom = new Error('boom');
 
       await expect(
-        adapter.runInTransaction(async exec => {
+        adapter.runInTransaction(async (exec: any) => {
           await exec('INSERT INTO users (name) VALUES (?)', ['alice']);
           throw boom;
         })
@@ -143,31 +143,33 @@ describe('createExpoSqliteAdapter', () => {
   });
 
   describe('serialized concurrent transactions', () => {
+    let adapter: any;
+
     it("does not start the second transaction's BEGIN until the first commits", async () => {
       const database = createFakeExpoSqliteDb();
       adapter = createExpoSqliteAdapter({ database });
       await adapter.run('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
 
-      const calls = [];
+      const calls: string[] = [];
       const originalExecAsync = database.execAsync.bind(database);
-      database.execAsync = async sql => {
+      database.execAsync = async (sql: string) => {
         calls.push(sql.trim().split(/\s+/)[0].toUpperCase());
         return originalExecAsync(sql);
       };
 
-      let resolveFirst;
-      const firstStarted = new Promise(resolve => {
+      let resolveFirst: () => void;
+      const firstStarted = new Promise<void>(resolve => {
         resolveFirst = resolve;
       });
 
-      const first = adapter.runInTransaction(async exec => {
+      const first = adapter.runInTransaction(async (exec: any) => {
         resolveFirst();
         await new Promise(r => setTimeout(r, 20));
         await exec('INSERT INTO users (name) VALUES (?)', ['alice']);
       });
 
       await firstStarted;
-      const second = adapter.runInTransaction(async exec => {
+      const second = adapter.runInTransaction(async (exec: any) => {
         await exec('INSERT INTO users (name) VALUES (?)', ['bob']);
       });
 
@@ -188,21 +190,23 @@ describe('createExpoSqliteAdapter', () => {
   });
 
   describe('nested transaction guard', () => {
+    let adapter: any;
+
     it('rejects synchronously with a clear error and issues no additional BEGIN', async () => {
       const database = createFakeExpoSqliteDb();
       adapter = createExpoSqliteAdapter({ database });
       await adapter.run('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
 
-      const calls = [];
+      const calls: string[] = [];
       const originalExecAsync = database.execAsync.bind(database);
-      database.execAsync = async sql => {
+      database.execAsync = async (sql: string) => {
         calls.push(sql.trim().split(/\s+/)[0].toUpperCase());
         return originalExecAsync(sql);
       };
 
       const innerFn = jest.fn(async () => {});
 
-      await adapter.runInTransaction(async exec => {
+      await adapter.runInTransaction(async (exec: any) => {
         await expect(exec.runInTransaction(innerFn)).rejects.toThrow(
           /nested transactions? (is |are )?not supported/i
         );
@@ -215,7 +219,7 @@ describe('createExpoSqliteAdapter', () => {
   });
 
   describe('scoped exec handle shape', () => {
-    let adapter;
+    let adapter: any;
 
     beforeEach(async () => {
       const database = createFakeExpoSqliteDb();
@@ -224,14 +228,14 @@ describe('createExpoSqliteAdapter', () => {
     });
 
     it('exec is callable with the pre-change signature', async () => {
-      await adapter.runInTransaction(async exec => {
+      await adapter.runInTransaction(async (exec: any) => {
         const result = await exec('INSERT INTO users (name) VALUES (?)', ['alice']);
         expect(result.rowsAffected).toBe(1);
       });
     });
 
     it('exec.run behaves identically to exec', async () => {
-      await adapter.runInTransaction(async exec => {
+      await adapter.runInTransaction(async (exec: any) => {
         expect(typeof exec.run).toBe('function');
         const result = await exec.run('INSERT INTO users (name) VALUES (?)', ['bob']);
         expect(result.rowsAffected).toBe(1);
@@ -242,13 +246,13 @@ describe('createExpoSqliteAdapter', () => {
     });
 
     it('exec is frozen', async () => {
-      await adapter.runInTransaction(async exec => {
+      await adapter.runInTransaction(async (exec: any) => {
         expect(Object.isFrozen(exec)).toBe(true);
       });
     });
 
     it('exec.runInTransaction has arity 1', async () => {
-      await adapter.runInTransaction(async exec => {
+      await adapter.runInTransaction(async (exec: any) => {
         expect(typeof exec.runInTransaction).toBe('function');
         expect(exec.runInTransaction.length).toBe(1);
       });
@@ -256,17 +260,45 @@ describe('createExpoSqliteAdapter', () => {
   });
 
   describe('source does not reference async_hooks', () => {
-    it('contains no async_hooks or AsyncLocalStorage reference', () => {
-      // eslint-disable-next-line global-require
-      const fs = require('fs');
-      // eslint-disable-next-line global-require
-      const path = require('path');
-      const source = fs.readFileSync(
-        path.join(__dirname, '../../src/adapters/expo-sqlite.js'),
-        'utf8'
-      );
-      expect(source).not.toMatch(/async_hooks/);
-      expect(source).not.toMatch(/AsyncLocalStorage/);
+    // eslint-disable-next-line global-require
+    const fs = require('fs');
+    // eslint-disable-next-line global-require
+    const path = require('path');
+
+    function walk(dir: string, extension: string): string[] {
+      if (!fs.existsSync(dir)) return [];
+      const entries: string[] = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          entries.push(...walk(fullPath, extension));
+        } else if (entry.name.endsWith(extension)) {
+          entries.push(fullPath);
+        }
+      }
+      return entries;
+    }
+
+    it('contains no async_hooks or AsyncLocalStorage reference in src/**/*.ts', () => {
+      const srcRoot = path.join(__dirname, '../../src');
+      const files = walk(srcRoot, '.ts');
+      expect(files.length).toBeGreaterThan(0);
+      for (const file of files) {
+        const source = fs.readFileSync(file, 'utf8');
+        expect(source).not.toMatch(/async_hooks/);
+        expect(source).not.toMatch(/AsyncLocalStorage/);
+      }
+    });
+
+    it('contains no async_hooks or AsyncLocalStorage reference in dist/**/*.js', () => {
+      const distRoot = path.join(__dirname, '../../dist');
+      const files = walk(distRoot, '.js');
+      expect(files.length).toBeGreaterThan(0);
+      for (const file of files) {
+        const source = fs.readFileSync(file, 'utf8');
+        expect(source).not.toMatch(/async_hooks/);
+        expect(source).not.toMatch(/AsyncLocalStorage/);
+      }
     });
   });
 

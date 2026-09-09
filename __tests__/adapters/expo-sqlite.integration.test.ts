@@ -1,6 +1,6 @@
-const { createFakeExpoSqliteDb } = require('../helpers/fake-expo-sqlite');
-const { createExpoSqliteAdapter } = require('../../src/adapters/expo-sqlite');
-const { createMigrationRunner } = require('../../src/migrations/runner');
+import { createFakeExpoSqliteDb } from '../helpers/fake-expo-sqlite';
+import { createExpoSqliteAdapter } from '../../src/adapters/expo-sqlite';
+import { createMigrationRunner } from '../../src/migrations/runner';
 
 function makeAdapter() {
   const database = createFakeExpoSqliteDb();

@@ -1,12 +1,18 @@
 # @nuup/offline-kit
 
-Offline-first toolkit for React Native/Expo apps: SQLite migrations, a bidirectional sync engine, and a query/store abstraction.
+Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only sync engine, and a query/store abstraction. Written in TypeScript, compiled with plain `tsc` into a committed `dist/`.
 
-> Status: not yet published to npm. Consumed by installing a tarball generated with `npm pack` (see [Local usage](#local-usage-pre-npm) below).
+> Status: not yet published to npm. Consumed by installing straight from GitHub (or a tarball via `npm pack`) — no local build step required, since `dist/` ships in the repository.
 
 ## Install
 
-Once published:
+From GitHub (no local build required):
+
+```sh
+npm install github:nuup/offline-kit expo-sqlite
+```
+
+Once published to npm:
 
 ```sh
 npm install @nuup/offline-kit expo-sqlite
@@ -14,16 +20,24 @@ npm install @nuup/offline-kit expo-sqlite
 
 `expo-sqlite` (>=13) is a peer dependency and is not bundled.
 
+### `dist/` policy
+
+This package ships a committed `dist/` (`.js` + `.d.ts` + source maps) built by plain `tsc` (`npm run build`) from `src/**/*.ts`. CI (`npm run verify:dist`) fails whenever the committed `dist/` does not match a fresh rebuild of `src/`, so an installed Git/tarball checkout never needs a local TypeScript build. If you edit `src/`, run `npm run build` and commit the refreshed `dist/` alongside it.
+
+### Migrating from 0.1.x (pre-TypeScript)
+
+`main`/`types`/`exports` now point at `dist/` instead of `src/`; the public subpaths (`.`, `./migrations`, `./adapters/expo-sqlite`, plus the new `./sync`) are unchanged. `files` changed from `["src"]` to `["dist", "README.md", "LICENSE"]`. Consumers importing only the documented subpaths need no code changes — reinstall to pick up 0.2.0.
+
 ## Local usage (pre-npm)
 
-While this package is not yet on the npm registry, consumer apps install it from a tarball:
+While this package is not yet on the npm registry, consumer apps can install it from a tarball:
 
 ```sh
 # in nuup-offline-kit
 npm pack
 
 # in the consumer app (e.g. mt_app_expo)
-npm install file:../nuup-offline-kit/nuup-offline-kit-0.1.0.tgz
+npm install file:../nuup-offline-kit/nuup-offline-kit-0.2.0.tgz
 ```
 
 Regenerate and reinstall the tarball whenever this package's source changes.
@@ -120,10 +134,66 @@ await adapter.runInTransaction(async exec => {
 
 This adapter intentionally avoids Node's `async_hooks`/`AsyncLocalStorage` — Hermes (React Native/Expo's JS engine) doesn't implement it, and requiring it would break Metro bundling for any consumer app.
 
-## Testing
+## Sync engine
 
-```sh
-npm test
+`createSyncEngine` pulls remote datasets into local SQLite tables through a consumer-injected `remote` adapter. It is **pull-only** — there is no push/upload API, no conflict resolution, and no incremental cursors; the consumer's `remote.fetch` owns pagination, auth, retry and any `since` parameterization.
+
+```ts
+import { createSyncEngine } from '@nuup/offline-kit/sync';
+// or: import { createSyncEngine } from '@nuup/offline-kit';
+
+const engine = createSyncEngine({
+  adapter,
+  remote: {
+    async fetch({ table }) {
+      const res = await fetch(`https://api.example.com/${table}`);
+      return res.json();
+    },
+  },
+  tables: [
+    { name: 'assistants', strategy: 'replace', columns: ['id', 'name'] },
+    { name: 'messages', strategy: 'upsert', columns: ['id', 'thread_id', 'body'], primaryKey: 'id' },
+  ],
+});
+
+const summary = await engine.sync();
+// { results: [{ table, strategy, count, syncedAt }, ...], errors: [{ table, error }, ...] }
+
+const one = await engine.syncTable('assistants');
+// { table: 'assistants', strategy: 'replace', count: <rows applied this sync>, syncedAt }
+
+const state = await engine.getSyncState();
+// Map<string, { syncedAt: string, rowCount: number }>
 ```
 
-Runs the Jest suite, including a `better-sqlite3`-backed fake for `expo-sqlite` used by the adapter's integration tests.
+### Table config
+
+Each entry in `tables` declares:
+
+- `name` — the local table name (must already exist; migrations own DDL, not sync).
+- `columns` — the only column names sync will ever read/write; extra fields on a remote row are ignored, never turned into SQL identifiers.
+- `strategy: 'replace'` — deletes all rows then inserts the fetched rows, in one transaction.
+- `strategy: 'upsert'` — requires `primaryKey`; inserts new rows and updates existing rows by that key, without duplicating.
+- `allowEmpty` (replace only, default `false`) — when `remote.fetch` resolves `[]`, `'replace'` no-ops (keeps existing rows, does not touch sync state) unless `allowEmpty: true`, in which case the table is cleared and sync state records `rowCount: 0`.
+- `batchSize` (optional) — chunks large payloads into batches of this size within the same transaction.
+
+### Atomicity and `_nuup_sync_state`
+
+Every `syncTable(name)` call applies the fetched rows and records `_nuup_sync_state` in exactly **one** `adapter.runInTransaction` — a mid-transaction failure rolls back both the table data and the sync-state row together, leaving prior state untouched. The `_nuup_sync_state(table_name TEXT PRIMARY KEY, synced_at TEXT, row_count INTEGER NOT NULL)` table itself is bootstrapped once via `adapter.run` (`CREATE TABLE IF NOT EXISTS`), outside any per-table transaction — matching how migrations bootstrap `_nuup_migrations`.
+
+`sync()` isolates each configured table in its own transaction and iterates them in declared order: one table's `remote.fetch` rejection is recorded in `errors` without blocking the rest.
+
+`count` in the returned `SyncTableResult` is the number of rows **applied in that sync**, not the table's total row count.
+
+### SQL identifier safety
+
+Table and column identifiers used in generated SQL come only from the declared `tables` config — never from a fetched row's own keys — and every value is passed as a bound parameter. This prevents a malicious or malformed remote payload from injecting SQL identifiers.
+
+## Build & Testing
+
+```sh
+npm run build      # tsc -> dist/ (committed)
+npm run typecheck  # tsc --noEmit, strict
+npm test           # jest (ts-jest), incl. better-sqlite3-backed expo-sqlite fake
+npm run verify:dist  # rebuilds and fails if dist/ drifted from src/
+```

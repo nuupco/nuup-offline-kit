@@ -1,9 +1,11 @@
-function validateMigrations(migrations) {
+import type { Migration } from '../types';
+
+export function validateMigrations(migrations: unknown): Migration[] {
   if (!Array.isArray(migrations) || migrations.length === 0) {
     throw new Error('migrations must be a non-empty array');
   }
 
-  const sorted = [...migrations].sort((a, b) => a.version - b.version);
+  const sorted = [...(migrations as Migration[])].sort((a, b) => a.version - b.version);
 
   sorted.forEach((migration, index) => {
     const expectedVersion = index + 1;
@@ -23,5 +25,3 @@ function validateMigrations(migrations) {
 
   return sorted;
 }
-
-module.exports = { validateMigrations };

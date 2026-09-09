@@ -1,3 +1,5 @@
+import type { Adapter, Exec, ExecOptions, ExecResult, ExpoSqliteDatabase, ExpoSqliteModule, ScopedExec, SqlParam } from '../types';
+
 const READ_REGEX = /^\s*(?:SELECT|PRAGMA|EXPLAIN|WITH)\b/i;
 
 const NESTED_TRANSACTION_ERROR =
@@ -17,17 +19,19 @@ const NESTED_TRANSACTION_ERROR =
  *
  * The handle is frozen before being handed to `fn`.
  */
-function createScopedExec(execute) {
-  const scopedExec = (sql, params = [], options = {}) => execute(sql, params, options);
-  scopedExec.run = scopedExec;
-  // eslint-disable-next-line no-unused-vars
-  scopedExec.runInTransaction = async fn => {
+export function createScopedExec(execute: Exec): ScopedExec {
+  const scopedExec = ((sql: string, params: SqlParam[] = [], options: ExecOptions = {}) =>
+    execute(sql, params, options)) as ScopedExec;
+  (scopedExec as any).run = scopedExec;
+  (scopedExec as any).runInTransaction = async (_fn: (exec: ScopedExec) => unknown) => {
     throw new Error(NESTED_TRANSACTION_ERROR);
   };
   return Object.freeze(scopedExec);
 }
 
-function createExpoSqliteAdapter({ databaseName, database } = {}) {
+export function createExpoSqliteAdapter(
+  { databaseName, database }: { databaseName?: string; database?: ExpoSqliteDatabase } = {}
+): Adapter {
   if (databaseName === undefined && database === undefined) {
     return _throwInputError(
       'createExpoSqliteAdapter: exactly one of "databaseName" or "database" is required, but neither was given.'
@@ -40,36 +44,44 @@ function createExpoSqliteAdapter({ databaseName, database } = {}) {
   }
 
   let db = database;
-  let queue = Promise.resolve();
+  let queue: Promise<unknown> = Promise.resolve();
 
-  function resolveDb() {
+  function resolveDb(): ExpoSqliteDatabase {
     if (!db) {
       // eslint-disable-next-line global-require
-      const expoSqlite = require('expo-sqlite');
-      db = expoSqlite.openDatabaseSync(databaseName);
+      const expoSqlite = require('expo-sqlite') as ExpoSqliteModule;
+      db = expoSqlite.openDatabaseSync(databaseName as string);
     }
     return db;
   }
 
-  async function execute(sql, params = [], options = {}) {
+  const execute: Exec = async function execute<R = Record<string, unknown>>(
+    sql: string,
+    params: SqlParam[] = [],
+    options: ExecOptions = {}
+  ): Promise<ExecResult<R>> {
     const conn = resolveDb();
     const isRead = options.read !== undefined ? options.read : READ_REGEX.test(sql);
 
     if (isRead) {
-      const rows = await conn.getAllAsync(sql, params);
+      const rows = await conn.getAllAsync<R>(sql, params);
       return { rows, rowsAffected: 0, insertId: undefined };
     }
 
     const { changes, lastInsertRowId } = await conn.runAsync(sql, params);
     return { rows: [], rowsAffected: changes, insertId: lastInsertRowId };
-  }
+  };
 
-  async function run(sql, params = [], options = {}) {
-    return execute(sql, params, options);
-  }
+  const run: Exec = async function run<R = Record<string, unknown>>(
+    sql: string,
+    params: SqlParam[] = [],
+    options: ExecOptions = {}
+  ): Promise<ExecResult<R>> {
+    return execute<R>(sql, params, options);
+  };
 
-  async function runInTransaction(fn) {
-    const job = async () => {
+  async function runInTransaction<T>(fn: (exec: ScopedExec) => Promise<T> | T): Promise<T> {
+    const job = async (): Promise<T> => {
       const conn = resolveDb();
       await conn.execAsync('BEGIN');
       try {
@@ -82,7 +94,7 @@ function createExpoSqliteAdapter({ databaseName, database } = {}) {
       }
     };
 
-    const result = queue.then(job);
+    const result = queue.then(job) as Promise<T>;
     // Prevent unhandled rejection tracking on the internal queue chain while
     // still propagating the actual error to the caller via `result`.
     queue = result.catch(() => {});
@@ -92,8 +104,6 @@ function createExpoSqliteAdapter({ databaseName, database } = {}) {
   return { run, runInTransaction };
 }
 
-function _throwInputError(message) {
+function _throwInputError(message: string): never {
   throw new Error(message);
 }
-
-module.exports = { createExpoSqliteAdapter };

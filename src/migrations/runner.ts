@@ -1,13 +1,24 @@
-const { validateMigrations } = require('./validate');
-const { checksumStatements } = require('./checksum');
+import type { Adapter, Migration, MigrationHooks, MigrationRunner } from '../types';
+import { validateMigrations } from './validate';
+import { checksumStatements } from './checksum';
 
-const DEFAULT_TABLE = '_nuup_migrations';
+export const DEFAULT_TABLE = '_nuup_migrations';
 
-function createMigrationRunner({ adapter, migrations, tableName = DEFAULT_TABLE, hooks = {} }) {
+export function createMigrationRunner({
+  adapter,
+  migrations,
+  tableName = DEFAULT_TABLE,
+  hooks = {},
+}: {
+  adapter: Adapter;
+  migrations: Migration[];
+  tableName?: string;
+  hooks?: MigrationHooks;
+}): MigrationRunner {
   const sorted = validateMigrations(migrations);
   const { onStart, onComplete, onError } = hooks;
 
-  async function ensureTrackingTable() {
+  async function ensureTrackingTable(): Promise<void> {
     await adapter.run(
       `CREATE TABLE IF NOT EXISTS ${tableName} (
         version INTEGER PRIMARY KEY,
@@ -17,17 +28,17 @@ function createMigrationRunner({ adapter, migrations, tableName = DEFAULT_TABLE,
     );
   }
 
-  async function getAppliedVersions() {
+  async function getAppliedVersions(): Promise<Map<number, string>> {
     const { rows } = await adapter.run(`SELECT version, checksum FROM ${tableName} ORDER BY version ASC`);
-    const applied = new Map();
-    rows.forEach(row => applied.set(row.version, row.checksum));
+    const applied = new Map<number, string>();
+    rows.forEach((row: any) => applied.set(row.version, row.checksum));
     return applied;
   }
 
-  async function migrate() {
+  async function migrate(): Promise<{ appliedVersions: number[] }> {
     await ensureTrackingTable();
     const applied = await getAppliedVersions();
-    const appliedVersions = [];
+    const appliedVersions: number[] = [];
 
     for (const migration of sorted) {
       const checksum = checksumStatements(migration.statements);
@@ -72,5 +83,3 @@ function createMigrationRunner({ adapter, migrations, tableName = DEFAULT_TABLE,
 
   return { migrate, getAppliedVersions };
 }
-
-module.exports = { createMigrationRunner, DEFAULT_TABLE };
