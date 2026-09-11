@@ -2,15 +2,24 @@
 
 Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only sync engine, and a query/store abstraction. Written in TypeScript, compiled with plain `tsc` into a committed `dist/`.
 
-> Status: not yet published to npm. Consumed by installing straight from GitHub (or a tarball via `npm pack`) — no local build step required, since `dist/` ships in the repository.
+> Status: public on GitHub, not published to npm. Consumed by installing straight from a tagged GitHub release (or a tarball via `npm pack`) — no local build step required, since `dist/` ships in the repository.
 
 ## Install
 
-From GitHub (no local build required):
+Install from a tagged release, pinned to that tag — never from `main`, since a later push there could change the API under your app without warning:
 
 ```sh
-npm install github:nuupco/nuup-offline-kit expo-sqlite
+npm install github:nuupco/nuup-offline-kit#v0.2.0 expo-sqlite
 ```
+
+Yarn / pnpm use the same `github:` spec:
+
+```sh
+yarn add github:nuupco/nuup-offline-kit#v0.2.0 expo-sqlite
+pnpm add github:nuupco/nuup-offline-kit#v0.2.0 expo-sqlite
+```
+
+To bump the version later, update the `#v0.2.0` tag reference to the new tag and reinstall. See [Releasing a new tag](#releasing-a-new-tag) for how new tags get cut.
 
 Once published to npm:
 
@@ -19,6 +28,20 @@ npm install @nuup/offline-kit expo-sqlite
 ```
 
 `expo-sqlite` (>=13) is a peer dependency and is not bundled.
+
+### Releasing a new tag
+
+`main` is protected — changes land via PR, not direct push. To cut a new consumable version:
+
+1. Merge the change into `main` through a reviewed PR.
+2. Bump `version` in `package.json` following semver.
+3. From an up-to-date `main`, tag the release and push the tag:
+
+   ```sh
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+4. Consumers point their `github:nuupco/nuup-offline-kit#vX.Y.Z` reference at the new tag when they're ready to upgrade.
 
 ### `dist/` policy
 
