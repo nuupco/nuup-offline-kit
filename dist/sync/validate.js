@@ -18,7 +18,7 @@ function validateSyncTables(tables) {
         if (typeof table !== 'object' || table === null) {
             throw new Error(`table config at index ${index} must be an object`);
         }
-        const { name, strategy, columns, primaryKey, batchSize, allowEmpty } = table;
+        const { name, strategy, columns, primaryKey, batchSize, allowEmpty, deletedAtColumn } = table;
         assertIdentifier(name, `tables[${index}].name`);
         if (strategy !== 'replace' && strategy !== 'upsert') {
             throw new Error(`tables[${index}] ("${name}") has an invalid strategy: expected "replace" or "upsert", got ${JSON.stringify(strategy)}`);
@@ -27,6 +27,9 @@ function validateSyncTables(tables) {
             throw new Error(`tables[${index}] ("${name}") must declare a non-empty "columns" array`);
         }
         columns.forEach((column, columnIndex) => assertIdentifier(column, `tables[${index}].columns[${columnIndex}]`));
+        if (strategy === 'replace' && deletedAtColumn !== undefined) {
+            throw new Error(`tables[${index}] ("${name}") deletedAtColumn is not supported for strategy "replace"`);
+        }
         if (strategy === 'upsert') {
             if (typeof primaryKey !== 'string' || primaryKey.length === 0) {
                 throw new Error(`tables[${index}] ("${name}") uses strategy "upsert" and must declare a "primaryKey"`);
@@ -35,12 +38,22 @@ function validateSyncTables(tables) {
             if (!columns.includes(primaryKey)) {
                 throw new Error(`tables[${index}] ("${name}") primaryKey "${primaryKey}" must be included in "columns"`);
             }
+            if (deletedAtColumn !== undefined) {
+                assertIdentifier(deletedAtColumn, `tables[${index}].deletedAtColumn`);
+                if (deletedAtColumn === primaryKey) {
+                    throw new Error(`tables[${index}] ("${name}") deletedAtColumn must not be the same column as primaryKey ("${primaryKey}")`);
+                }
+                if (!columns.includes(deletedAtColumn)) {
+                    throw new Error(`tables[${index}] ("${name}") deletedAtColumn "${deletedAtColumn}" must be included in "columns"`);
+                }
+            }
             return {
                 name: name,
                 strategy: 'upsert',
                 columns: columns,
                 primaryKey,
                 ...(batchSize !== undefined ? { batchSize: batchSize } : {}),
+                ...(deletedAtColumn !== undefined ? { deletedAtColumn: deletedAtColumn } : {}),
             };
         }
         if (primaryKey !== undefined) {
