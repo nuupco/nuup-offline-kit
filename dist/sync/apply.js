@@ -45,6 +45,9 @@ async function applyUpsert(exec, table, rows) {
     const tableName = (0, validate_1.assertIdentifier)(table.name, 'table.name');
     const columns = table.columns.map((column, index) => (0, validate_1.assertIdentifier)(column, `columns[${index}]`));
     const primaryKey = (0, validate_1.assertIdentifier)(table.primaryKey, 'table.primaryKey');
+    const deletedAtColumn = table.deletedAtColumn !== undefined
+        ? (0, validate_1.assertIdentifier)(table.deletedAtColumn, 'table.deletedAtColumn')
+        : undefined;
     if (rows.length === 0)
         return 0;
     const placeholders = `(${columns.map(() => '?').join(', ')})`;
@@ -56,9 +59,19 @@ async function applyUpsert(exec, table, rows) {
         (updateAssignments
             ? ` ON CONFLICT(${primaryKey}) DO UPDATE SET ${updateAssignments}`
             : ` ON CONFLICT(${primaryKey}) DO NOTHING`);
+    const deleteSql = deletedAtColumn !== undefined ? `DELETE FROM ${tableName} WHERE ${primaryKey} = ?` : undefined;
     const batches = chunk(rows, table.batchSize ?? DEFAULT_BATCH_SIZE);
     for (const batch of batches) {
         for (const row of batch) {
+            if (deleteSql !== undefined && row[deletedAtColumn] != null) {
+                const key = row[primaryKey];
+                if (key == null) {
+                    throw new Error(`applyUpsert: table "${tableName}" received a tombstoned row (deletedAtColumn "${deletedAtColumn}") ` +
+                        `with a missing primaryKey "${primaryKey}" value`);
+                }
+                await exec(deleteSql, [key]);
+                continue;
+            }
             const values = columns.map(column => (row[column] ?? null));
             await exec(insertSql, values);
         }

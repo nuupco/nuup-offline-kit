@@ -65,4 +65,81 @@ describe('validateSyncTables', () => {
       validateSyncTables([{ name: 'assistants', strategy: 'merge', columns: ['id'] }])
     ).toThrow(/strategy/);
   });
+
+  describe('deletedAtColumn', () => {
+    it('throws a descriptive error when deletedAtColumn is not included in columns', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'upsert',
+            columns: ['id', 'name'],
+            primaryKey: 'id',
+            deletedAtColumn: 'deleted_at',
+          },
+        ])
+      ).toThrow(/assistants.*deletedAtColumn/s);
+    });
+
+    it('returns a normalized config carrying deletedAtColumn when included in columns', () => {
+      const tables = validateSyncTables([
+        {
+          name: 'assistants',
+          strategy: 'upsert',
+          columns: ['id', 'name', 'deleted_at'],
+          primaryKey: 'id',
+          deletedAtColumn: 'deleted_at',
+        },
+      ]);
+      expect(tables[0]).toMatchObject({ deletedAtColumn: 'deleted_at' });
+    });
+
+    it('rejects an invalid identifier for deletedAtColumn', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'upsert',
+            columns: ['id', 'name'],
+            primaryKey: 'id',
+            deletedAtColumn: 'deleted at',
+          },
+        ])
+      ).toThrow(/deletedAtColumn/);
+    });
+
+    it('does not include deletedAtColumn in the normalized config when absent', () => {
+      const tables = validateSyncTables([
+        { name: 'assistants', strategy: 'upsert', columns: ['id', 'name'], primaryKey: 'id' },
+      ]);
+      expect('deletedAtColumn' in tables[0]).toBe(false);
+    });
+
+    it('rejects deletedAtColumn on a replace-strategy table', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'replace',
+            columns: ['id', 'name', 'deleted_at'],
+            deletedAtColumn: 'deleted_at',
+          },
+        ])
+      ).toThrow(/assistants.*deletedAtColumn.*replace/s);
+    });
+
+    it('rejects deletedAtColumn equal to primaryKey', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'upsert',
+            columns: ['id', 'name'],
+            primaryKey: 'id',
+            deletedAtColumn: 'id',
+          },
+        ])
+      ).toThrow(/assistants.*deletedAtColumn.*primaryKey/s);
+    });
+  });
 });

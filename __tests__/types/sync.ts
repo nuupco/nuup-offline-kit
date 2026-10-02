@@ -20,6 +20,30 @@ const upsertMissingPrimaryKey: UpsertTableConfig = {
   columns: ['id', 'name'],
 };
 
-const tables: TableConfig[] = [replaceOk, upsertOk];
+// A valid upsert config may declare an optional deletedAtColumn.
+const upsertWithDeletedAtColumn: UpsertTableConfig = {
+  name: 'assistants',
+  strategy: 'upsert',
+  columns: ['id', 'name', 'deleted_at'],
+  primaryKey: 'id',
+  deletedAtColumn: 'deleted_at',
+};
 
-export { replaceOk, upsertOk, upsertMissingPrimaryKey, tables };
+const replaceWithDeletedAtColumn: ReplaceTableConfig = {
+  name: 'assistants',
+  strategy: 'replace',
+  columns: ['id', 'name', 'deleted_at'],
+  // @ts-expect-error — deletedAtColumn is upsert-only, not part of ReplaceTableConfig.
+  deletedAtColumn: 'deleted_at',
+};
+
+const tables: TableConfig[] = [replaceOk, upsertOk, upsertWithDeletedAtColumn];
+
+export {
+  replaceOk,
+  upsertOk,
+  upsertMissingPrimaryKey,
+  upsertWithDeletedAtColumn,
+  replaceWithDeletedAtColumn,
+  tables,
+};

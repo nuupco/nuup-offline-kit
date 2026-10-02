@@ -19,7 +19,8 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
       throw new Error(`table config at index ${index} must be an object`);
     }
 
-    const { name, strategy, columns, primaryKey, batchSize, allowEmpty } = table as Record<string, unknown>;
+    const { name, strategy, columns, primaryKey, batchSize, allowEmpty, deletedAtColumn } =
+      table as Record<string, unknown>;
 
     assertIdentifier(name, `tables[${index}].name`);
 
@@ -36,6 +37,12 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
     }
     columns.forEach((column, columnIndex) => assertIdentifier(column, `tables[${index}].columns[${columnIndex}]`));
 
+    if (strategy === 'replace' && deletedAtColumn !== undefined) {
+      throw new Error(
+        `tables[${index}] ("${name}") deletedAtColumn is not supported for strategy "replace"`
+      );
+    }
+
     if (strategy === 'upsert') {
       if (typeof primaryKey !== 'string' || primaryKey.length === 0) {
         throw new Error(`tables[${index}] ("${name}") uses strategy "upsert" and must declare a "primaryKey"`);
@@ -44,12 +51,26 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
       if (!columns.includes(primaryKey)) {
         throw new Error(`tables[${index}] ("${name}") primaryKey "${primaryKey}" must be included in "columns"`);
       }
+      if (deletedAtColumn !== undefined) {
+        assertIdentifier(deletedAtColumn, `tables[${index}].deletedAtColumn`);
+        if (deletedAtColumn === primaryKey) {
+          throw new Error(
+            `tables[${index}] ("${name}") deletedAtColumn must not be the same column as primaryKey ("${primaryKey}")`
+          );
+        }
+        if (!columns.includes(deletedAtColumn)) {
+          throw new Error(
+            `tables[${index}] ("${name}") deletedAtColumn "${deletedAtColumn}" must be included in "columns"`
+          );
+        }
+      }
       return {
         name: name as string,
         strategy: 'upsert',
         columns: columns as string[],
         primaryKey,
         ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
+        ...(deletedAtColumn !== undefined ? { deletedAtColumn: deletedAtColumn as string } : {}),
       };
     }
 

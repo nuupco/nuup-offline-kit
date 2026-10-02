@@ -61,6 +61,12 @@ export interface ReplaceTableConfig extends BaseTableConfig {
 export interface UpsertTableConfig extends BaseTableConfig {
     strategy: 'upsert';
     primaryKey: string;
+    /**
+     * Optional tombstone marker. When a fetched row has any non-null value in this
+     * column (including '', 0, false), the local row with that primaryKey is
+     * DELETEd instead of upserted. Must be listed in `columns`. Upsert-only.
+     */
+    deletedAtColumn?: string;
 }
 export type TableConfig = ReplaceTableConfig | UpsertTableConfig;
 export interface RemoteSource {
