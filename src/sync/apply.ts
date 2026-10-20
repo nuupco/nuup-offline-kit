@@ -10,7 +10,7 @@ export function chunk<T>(items: T[], size: number): T[][] {
   return result;
 }
 
-const DEFAULT_BATCH_SIZE = 200;
+export const DEFAULT_BATCH_SIZE = 200;
 
 /**
  * Deletes all rows from `table.name`, then inserts the given rows.
