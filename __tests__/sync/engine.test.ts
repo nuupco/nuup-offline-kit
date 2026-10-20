@@ -252,6 +252,60 @@ describe('createSyncEngine', () => {
       expect(state.get('assistants')).toBeUndefined();
     });
 
+    it('commits each upsert batch in its own transaction instead of one transaction for the whole table', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const runInTransactionSpy = jest.spyOn(adapter, 'runInTransaction');
+
+      const rows = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `name-${i + 1}` }));
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: rows }),
+        tables: [{ name: 'assistants', strategy: 'upsert', columns: ['id', 'name'], primaryKey: 'id', batchSize: 4 }],
+      });
+
+      const result = await engine.syncTable('assistants');
+
+      expect(result.count).toBe(10);
+      // 3 batches (4 + 4 + 2) plus one final transaction to record sync state.
+      expect(runInTransactionSpy).toHaveBeenCalledTimes(4);
+      const { rows: stored } = await adapter.run('SELECT id FROM assistants ORDER BY id');
+      expect(stored).toHaveLength(10);
+
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.rowCount).toBe(10);
+    });
+
+    it('keeps earlier successful upsert batches committed when a later batch fails (batches are not all-or-nothing)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+
+      // Batch 1 (ids 1-2) is valid; batch 2 (ids 3-4) has a NULL name and violates NOT NULL.
+      const rows = [
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'bob' },
+        { id: 3, name: null },
+        { id: 4, name: 'dave' },
+      ];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: rows }),
+        tables: [{ name: 'assistants', strategy: 'upsert', columns: ['id', 'name'], primaryKey: 'id', batchSize: 2 }],
+      });
+
+      await expect(engine.syncTable('assistants')).rejects.toThrow();
+
+      const { rows: stored } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+      expect(stored).toEqual([
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'bob' },
+      ]);
+
+      // The failure happened before the final recordSyncState transaction, so no watermark was written.
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')).toBeUndefined();
+    });
+
     it('rejects createSyncEngine when a replace-strategy table declares deletedAtColumn, before touching adapter or remote', () => {
       const adapter = makeAdapter();
       const runSpy = jest.spyOn(adapter, 'run');

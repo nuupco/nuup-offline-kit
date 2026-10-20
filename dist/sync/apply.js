@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_BATCH_SIZE = void 0;
 exports.chunk = chunk;
 exports.applyReplace = applyReplace;
 exports.applyUpsert = applyUpsert;
@@ -13,7 +14,7 @@ function chunk(items, size) {
     }
     return result;
 }
-const DEFAULT_BATCH_SIZE = 200;
+exports.DEFAULT_BATCH_SIZE = 200;
 /**
  * Deletes all rows from `table.name`, then inserts the given rows.
  * SQL identifiers (table/column names) come only from the declared `table`
@@ -27,7 +28,7 @@ async function applyReplace(exec, table, rows) {
         return 0;
     const placeholders = `(${columns.map(() => '?').join(', ')})`;
     const insertSql = `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES ${placeholders}`;
-    const batches = chunk(rows, table.batchSize ?? DEFAULT_BATCH_SIZE);
+    const batches = chunk(rows, table.batchSize ?? exports.DEFAULT_BATCH_SIZE);
     for (const batch of batches) {
         for (const row of batch) {
             const values = columns.map(column => (row[column] ?? null));
@@ -60,7 +61,7 @@ async function applyUpsert(exec, table, rows) {
             ? ` ON CONFLICT(${primaryKey}) DO UPDATE SET ${updateAssignments}`
             : ` ON CONFLICT(${primaryKey}) DO NOTHING`);
     const deleteSql = deletedAtColumn !== undefined ? `DELETE FROM ${tableName} WHERE ${primaryKey} = ?` : undefined;
-    const batches = chunk(rows, table.batchSize ?? DEFAULT_BATCH_SIZE);
+    const batches = chunk(rows, table.batchSize ?? exports.DEFAULT_BATCH_SIZE);
     for (const batch of batches) {
         for (const row of batch) {
             if (deleteSql !== undefined && row[deletedAtColumn] != null) {

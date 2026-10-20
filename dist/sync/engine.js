@@ -15,15 +15,27 @@ function createSyncEngine({ adapter, remote, tables, syncStateTable = state_1.DE
         }
         return bootstrapped;
     }
-    async function applyTable(exec, table, rows) {
-        if (table.strategy === 'upsert') {
-            return (0, apply_1.applyUpsert)(exec, table, rows);
-        }
-        const replaceTable = table;
-        if (rows.length === 0 && !replaceTable.allowEmpty) {
+    async function applyReplaceTable(exec, table, rows) {
+        if (rows.length === 0 && !table.allowEmpty) {
             return -1; // sentinel: no-op, caller must not write sync-state
         }
-        return (0, apply_1.applyReplace)(exec, replaceTable, rows);
+        return (0, apply_1.applyReplace)(exec, table, rows);
+    }
+    // Each batch commits in its own short transaction instead of one
+    // transaction for the whole table: on a large pull, holding a single
+    // transaction open for thousands of rows blocks every other write on the
+    // shared connection for the duration. 'upsert' rows are idempotent, so a
+    // partial commit (earlier batches persisted, a later one rejected) is safe
+    // to retry — unlike 'replace', which keeps its single transaction because
+    // its DELETE+INSERT must stay all-or-nothing.
+    async function syncUpsertTable(table, name, rows) {
+        const batches = (0, apply_1.chunk)(rows, table.batchSize ?? apply_1.DEFAULT_BATCH_SIZE);
+        let count = 0;
+        for (const batch of batches) {
+            count += await adapter.runInTransaction(exec => (0, apply_1.applyUpsert)(exec, table, batch));
+        }
+        await adapter.runInTransaction(exec => (0, state_1.recordSyncState)(exec, syncStateTable, name, count));
+        return count;
     }
     async function syncTable(name) {
         const table = byName.get(name);
@@ -35,14 +47,16 @@ function createSyncEngine({ adapter, remote, tables, syncStateTable = state_1.DE
             onTableStart(name);
         try {
             const rows = await remote.fetch({ table: name });
-            const result = await adapter.runInTransaction(async (exec) => {
-                const count = await applyTable(exec, table, rows);
-                if (count === -1) {
-                    return null;
-                }
-                await (0, state_1.recordSyncState)(exec, syncStateTable, name, count);
-                return count;
-            });
+            const result = table.strategy === 'upsert'
+                ? await syncUpsertTable(table, name, rows)
+                : await adapter.runInTransaction(async (exec) => {
+                    const count = await applyReplaceTable(exec, table, rows);
+                    if (count === -1) {
+                        return null;
+                    }
+                    await (0, state_1.recordSyncState)(exec, syncStateTable, name, count);
+                    return count;
+                });
             if (result === null) {
                 // Empty payload, replace strategy without allowEmpty: no-op.
                 const existing = await (0, state_1.readAllSyncState)(adapter, syncStateTable);

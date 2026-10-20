@@ -1,5 +1,6 @@
 import type { ReplaceTableConfig, ScopedExec, UpsertTableConfig } from '../types';
 export declare function chunk<T>(items: T[], size: number): T[][];
+export declare const DEFAULT_BATCH_SIZE = 200;
 /**
  * Deletes all rows from `table.name`, then inserts the given rows.
  * SQL identifiers (table/column names) come only from the declared `table`
