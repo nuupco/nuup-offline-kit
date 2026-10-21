@@ -53,11 +53,21 @@ function createExpoSqliteAdapter({ databaseName, database } = {}) {
         const { changes, lastInsertRowId } = await conn.runAsync(sql, params);
         return { rows: [], rowsAffected: changes, insertId: lastInsertRowId };
     };
-    const run = async function run(sql, params = [], options = {}) {
-        return execute(sql, params, options);
+    // Enqueues `job` behind every previously enqueued `run`/`runInTransaction`
+    // call on this adapter's shared connection, so none of them ever executes
+    // concurrently with an open transaction (or with each other).
+    function enqueue(job) {
+        const result = queue.then(job);
+        // Prevent unhandled rejection tracking on the internal queue chain while
+        // still propagating the actual error to the caller via `result`.
+        queue = result.catch(() => { });
+        return result;
+    }
+    const run = function run(sql, params = [], options = {}) {
+        return enqueue(() => execute(sql, params, options));
     };
-    async function runInTransaction(fn) {
-        const job = async () => {
+    function runInTransaction(fn) {
+        return enqueue(async () => {
             const conn = resolveDb();
             await conn.execAsync('BEGIN');
             try {
@@ -69,12 +79,7 @@ function createExpoSqliteAdapter({ databaseName, database } = {}) {
                 await conn.execAsync('ROLLBACK');
                 throw error;
             }
-        };
-        const result = queue.then(job);
-        // Prevent unhandled rejection tracking on the internal queue chain while
-        // still propagating the actual error to the caller via `result`.
-        queue = result.catch(() => { });
-        return result;
+        });
     }
     return { run, runInTransaction };
 }

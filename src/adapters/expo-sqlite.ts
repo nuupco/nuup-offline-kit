@@ -72,16 +72,27 @@ export function createExpoSqliteAdapter(
     return { rows: [], rowsAffected: changes, insertId: lastInsertRowId };
   };
 
-  const run: Exec = async function run<R = Record<string, unknown>>(
+  // Enqueues `job` behind every previously enqueued `run`/`runInTransaction`
+  // call on this adapter's shared connection, so none of them ever executes
+  // concurrently with an open transaction (or with each other).
+  function enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const result = queue.then(job) as Promise<T>;
+    // Prevent unhandled rejection tracking on the internal queue chain while
+    // still propagating the actual error to the caller via `result`.
+    queue = result.catch(() => {});
+    return result;
+  }
+
+  const run: Exec = function run<R = Record<string, unknown>>(
     sql: string,
     params: SqlParam[] = [],
     options: ExecOptions = {}
   ): Promise<ExecResult<R>> {
-    return execute<R>(sql, params, options);
+    return enqueue(() => execute<R>(sql, params, options));
   };
 
-  async function runInTransaction<T>(fn: (exec: ScopedExec) => Promise<T> | T): Promise<T> {
-    const job = async (): Promise<T> => {
+  function runInTransaction<T>(fn: (exec: ScopedExec) => Promise<T> | T): Promise<T> {
+    return enqueue(async (): Promise<T> => {
       const conn = resolveDb();
       await conn.execAsync('BEGIN');
       try {
@@ -92,13 +103,7 @@ export function createExpoSqliteAdapter(
         await conn.execAsync('ROLLBACK');
         throw error;
       }
-    };
-
-    const result = queue.then(job) as Promise<T>;
-    // Prevent unhandled rejection tracking on the internal queue chain while
-    // still propagating the actual error to the caller via `result`.
-    queue = result.catch(() => {});
-    return result;
+    });
   }
 
   return { run, runInTransaction };

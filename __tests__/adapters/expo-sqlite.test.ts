@@ -187,6 +187,48 @@ describe('createExpoSqliteAdapter', () => {
       // second BEGIN happens after first COMMIT/ROLLBACK
       expect(beginIndexes[1]).toBeGreaterThan(commitOrRollbackIndexes[0]);
     });
+
+    it('queues a top-level adapter.run() behind an in-flight transaction instead of racing it on the shared connection', async () => {
+      const database = createFakeExpoSqliteDb();
+      adapter = createExpoSqliteAdapter({ database });
+      await adapter.run('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const calls: string[] = [];
+      const originalExecAsync = database.execAsync.bind(database);
+      database.execAsync = async (sql: string) => {
+        calls.push(sql.trim().split(/\s+/)[0].toUpperCase());
+        return originalExecAsync(sql);
+      };
+      const originalRunAsync = database.runAsync.bind(database);
+      database.runAsync = async (sql: string, params: unknown[]) => {
+        calls.push(sql.trim().split(/\s+/)[0].toUpperCase());
+        return originalRunAsync(sql, params);
+      };
+
+      let resolveStarted: () => void;
+      const started = new Promise<void>(resolve => {
+        resolveStarted = resolve;
+      });
+
+      const transaction = adapter.runInTransaction(async (exec: any) => {
+        resolveStarted();
+        await new Promise(r => setTimeout(r, 20));
+        await exec('INSERT INTO users (name) VALUES (?)', ['alice']);
+      });
+
+      await started;
+      const topLevelRun = adapter.run('INSERT INTO users (name) VALUES (?)', ['bob']);
+
+      await Promise.all([transaction, topLevelRun]);
+
+      const commitIndex = calls.findIndex(c => c === 'COMMIT');
+      const insertIndexes = calls.map((c, i) => (c === 'INSERT' ? i : -1)).filter(i => i !== -1);
+
+      expect(commitIndex).toBeGreaterThan(-1);
+      // The top-level run's INSERT is the second one and must happen after COMMIT,
+      // never interleaved with the open transaction on the shared connection.
+      expect(insertIndexes[1]).toBeGreaterThan(commitIndex);
+    });
   });
 
   describe('nested transaction guard', () => {
