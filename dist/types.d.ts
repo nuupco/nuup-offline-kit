@@ -88,6 +88,15 @@ export interface SyncHooks {
     onTableStart?(table: string): void;
     onTableComplete?(result: SyncTableResult): void;
     onTableError?(table: string, error: unknown): void;
+    /**
+     * Called synchronously for each fetched row of an 'upsert'-strategy table,
+     * immediately before it would be written (not called for 'replace'
+     * tables). Return false to skip writing that row this pass — e.g. because
+     * the consumer has a newer local edit for it that hasn't synced yet. A
+     * skipped row is simply left alone; it gets another chance on the next
+     * sync pass since this engine has no per-row cursor or ack.
+     */
+    shouldApplyRow?(table: string, row: Record<string, unknown>): boolean;
 }
 export interface SyncEngineConfig {
     adapter: Adapter;

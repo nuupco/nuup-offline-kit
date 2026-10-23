@@ -7,7 +7,7 @@ const state_1 = require("./state");
 function createSyncEngine({ adapter, remote, tables, syncStateTable = state_1.DEFAULT_SYNC_STATE_TABLE, hooks = {}, }) {
     const validatedTables = (0, validate_1.validateSyncTables)(tables);
     const byName = new Map(validatedTables.map(table => [table.name, table]));
-    const { onTableStart, onTableComplete, onTableError } = hooks;
+    const { onTableStart, onTableComplete, onTableError, shouldApplyRow } = hooks;
     let bootstrapped;
     function ensureBootstrap() {
         if (!bootstrapped) {
@@ -29,7 +29,8 @@ function createSyncEngine({ adapter, remote, tables, syncStateTable = state_1.DE
     // to retry — unlike 'replace', which keeps its single transaction because
     // its DELETE+INSERT must stay all-or-nothing.
     async function syncUpsertTable(table, name, rows) {
-        const batches = (0, apply_1.chunk)(rows, table.batchSize ?? apply_1.DEFAULT_BATCH_SIZE);
+        const applicableRows = shouldApplyRow ? rows.filter(row => shouldApplyRow(name, row)) : rows;
+        const batches = (0, apply_1.chunk)(applicableRows, table.batchSize ?? apply_1.DEFAULT_BATCH_SIZE);
         let count = 0;
         for (const batch of batches) {
             count += await adapter.runInTransaction(exec => (0, apply_1.applyUpsert)(exec, table, batch));

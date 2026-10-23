@@ -199,15 +199,40 @@ Each entry in `tables` declares:
 - `strategy: 'upsert'` — requires `primaryKey`; inserts new rows and updates existing rows by that key, without duplicating.
 - `deletedAtColumn` (upsert only, optional, requires `@nuup/offline-kit` 0.3.0+) — names a column that marks a row as deleted. When a fetched row has **any non-null value** in this column — including falsy values such as `''`, `0`, or `false` — that row is not upserted; instead the local row with the same `primaryKey` is removed with a hard `DELETE`. `null` or an absent key is treated as "alive" and upserted normally. Must be listed in `columns` (so live rows still write it locally, always `null`) and must not equal `primaryKey`. Rejected at construction time on `strategy: 'replace'` tables. Deletes and upserts are chosen per row and interleaved within the same batch, so array order is preserved — if the same primary key appears more than once in a payload, the last occurrence wins. A tombstoned row with a `null`/missing primary key throws and rolls back the whole table's pass, rather than silently matching zero rows. Deleted rows count toward the same `count`/`rowCount` total as upserted rows — no separate counters.
 - `allowEmpty` (replace only, default `false`) — when `remote.fetch` resolves `[]`, `'replace'` no-ops (keeps existing rows, does not touch sync state) unless `allowEmpty: true`, in which case the table is cleared and sync state records `rowCount: 0`.
-- `batchSize` (optional) — chunks large payloads into batches of this size within the same transaction.
+- `batchSize` (optional, default 200) — chunks large payloads into batches of this size. For `'upsert'`, each batch commits in its **own** transaction (see [Atomicity](#atomicity-and-_nuup_sync_state)); for `'replace'`, batching only affects the insert loop inside the table's single transaction.
 
 ### Atomicity and `_nuup_sync_state`
 
-Every `syncTable(name)` call applies the fetched rows and records `_nuup_sync_state` in exactly **one** `adapter.runInTransaction` — a mid-transaction failure rolls back both the table data and the sync-state row together, leaving prior state untouched. The `_nuup_sync_state(table_name TEXT PRIMARY KEY, synced_at TEXT, row_count INTEGER NOT NULL)` table itself is bootstrapped once via `adapter.run` (`CREATE TABLE IF NOT EXISTS`), outside any per-table transaction — matching how migrations bootstrap `_nuup_migrations`.
+For `strategy: 'replace'`, `syncTable(name)` applies the fetched rows and records `_nuup_sync_state` in exactly **one** `adapter.runInTransaction` — a mid-transaction failure rolls back both the table data and the sync-state row together, leaving prior state untouched.
 
-`sync()` isolates each configured table in its own transaction and iterates them in declared order: one table's `remote.fetch` rejection is recorded in `errors` without blocking the rest.
+For `strategy: 'upsert'`, each batch (`batchSize`, default 200) commits in its **own** transaction instead of one transaction for the whole table — holding a single transaction open for thousands of rows would block every other write on the adapter's shared connection for the duration of the pull. `_nuup_sync_state` is recorded in one final transaction only after every batch succeeds. This means a failure partway through a table's rows leaves **earlier batches committed** — unlike `'replace'`, which is all-or-nothing. This is safe because upsert rows are idempotent: a retried sync re-applies the same rows with the same result, and no `_nuup_sync_state` is written (so the table isn't marked as fully synced) until every batch succeeded.
+
+The `_nuup_sync_state(table_name TEXT PRIMARY KEY, synced_at TEXT, row_count INTEGER NOT NULL)` table itself is bootstrapped once via `adapter.run` (`CREATE TABLE IF NOT EXISTS`), outside any per-table transaction — matching how migrations bootstrap `_nuup_migrations`.
+
+`sync()` iterates configured tables in declared order: one table's `remote.fetch` rejection is recorded in `errors` without blocking the rest.
 
 `count` in the returned `SyncTableResult` is the number of rows **applied in that sync**, not the table's total row count.
+
+### Concurrency and local writes
+
+This engine does not coordinate with writes the host app makes outside of `syncTable`/`sync` — there is no lock and no built-in conflict resolution. A fetched row's data was read from the remote at `remote.fetch()` time, before any transaction starts; if the app writes a newer local edit to that same row before the row's batch commits, a plain `'upsert'` will overwrite it with the (now stale) remote value, last-write-wins.
+
+If the host app tracks which local rows have unsynced edits (e.g. a `dirty`/`updated_at` column), use the `shouldApplyRow` hook to skip writing a fetched row while a local edit for it hasn't synced yet:
+
+```ts
+const engine = createSyncEngine({
+  adapter,
+  remote,
+  tables,
+  hooks: {
+    shouldApplyRow(table, row) {
+      return !isLocallyDirty(table, row[primaryKeyFor(table)]);
+    },
+  },
+});
+```
+
+`shouldApplyRow` is called synchronously, once per fetched row, only for `'upsert'`-strategy tables (never `'replace'`, which always fully replaces its contents). A skipped row is simply left alone — it isn't deleted, isn't counted in `SyncTableResult.count`, and gets another chance on the next sync pass, since this engine keeps no per-row cursor.
 
 ### SQL identifier safety
 
