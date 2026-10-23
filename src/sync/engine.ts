@@ -22,7 +22,7 @@ export function createSyncEngine({
 }: SyncEngineConfig): SyncEngine {
   const validatedTables = validateSyncTables(tables);
   const byName = new Map<string, TableConfig>(validatedTables.map(table => [table.name, table]));
-  const { onTableStart, onTableComplete, onTableError } = hooks;
+  const { onTableStart, onTableComplete, onTableError, shouldApplyRow } = hooks;
 
   let bootstrapped: Promise<void> | undefined;
   function ensureBootstrap(): Promise<void> {
@@ -55,7 +55,8 @@ export function createSyncEngine({
     name: string,
     rows: Record<string, unknown>[]
   ): Promise<number> {
-    const batches = chunk(rows, table.batchSize ?? DEFAULT_BATCH_SIZE);
+    const applicableRows = shouldApplyRow ? rows.filter(row => shouldApplyRow(name, row)) : rows;
+    const batches = chunk(applicableRows, table.batchSize ?? DEFAULT_BATCH_SIZE);
     let count = 0;
     for (const batch of batches) {
       count += await adapter.runInTransaction(exec => applyUpsert(exec, table, batch));

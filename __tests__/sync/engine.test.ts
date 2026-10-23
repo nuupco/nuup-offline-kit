@@ -306,6 +306,61 @@ describe('createSyncEngine', () => {
       expect(state.get('assistants')).toBeUndefined();
     });
 
+    it('skips a row when shouldApplyRow returns false, leaving the local copy untouched, and still applies the rest', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (2, 'local-pending-edit')");
+
+      const seen: { table: string; row: Record<string, unknown> }[] = [];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({
+          assistants: [
+            { id: 1, name: 'alice' },
+            { id: 2, name: 'stale-remote' },
+          ],
+        }),
+        tables: [{ name: 'assistants', strategy: 'upsert', columns: ['id', 'name'], primaryKey: 'id' }],
+        hooks: {
+          shouldApplyRow: (table, row) => {
+            seen.push({ table, row });
+            return row.id !== 2;
+          },
+        },
+      });
+
+      const result = await engine.syncTable('assistants');
+
+      expect(result.count).toBe(1);
+      expect(seen).toEqual([
+        { table: 'assistants', row: { id: 1, name: 'alice' } },
+        { table: 'assistants', row: { id: 2, name: 'stale-remote' } },
+      ]);
+
+      const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+      expect(rows).toEqual([
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'local-pending-edit' },
+      ]);
+    });
+
+    it('does not call shouldApplyRow for a replace-strategy table', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const shouldApplyRow = jest.fn().mockReturnValue(true);
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables: [{ name: 'assistants', strategy: 'replace', columns: ['id', 'name'] }],
+        hooks: { shouldApplyRow },
+      });
+
+      await engine.syncTable('assistants');
+
+      expect(shouldApplyRow).not.toHaveBeenCalled();
+    });
+
     it('rejects createSyncEngine when a replace-strategy table declares deletedAtColumn, before touching adapter or remote', () => {
       const adapter = makeAdapter();
       const runSpy = jest.spyOn(adapter, 'run');
