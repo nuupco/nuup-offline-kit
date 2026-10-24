@@ -1,6 +1,6 @@
 {
   "name": "@nuup/offline-kit",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only sync engine with catalog support, and an expo-sqlite adapter.",
   "license": "MIT",
   "main": "dist/index.js",
