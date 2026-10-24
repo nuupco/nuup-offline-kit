@@ -140,6 +140,28 @@ describe('createExpoSqliteAdapter', () => {
       const { rows } = await adapter.run('SELECT * FROM users');
       expect(rows).toHaveLength(0);
     });
+
+    it('rethrows the original error, not a failing ROLLBACK, when the rollback itself throws', async () => {
+      const boom = new Error('boom');
+      const rollbackFailure = new Error('connection already closed');
+      const database = createFakeExpoSqliteDb();
+      const realExecAsync = database.execAsync.bind(database);
+      database.execAsync = async (sql: string) => {
+        if (sql.trim().toUpperCase() === 'ROLLBACK') {
+          throw rollbackFailure;
+        }
+        return realExecAsync(sql);
+      };
+      const faultyAdapter = createExpoSqliteAdapter({ database });
+      await faultyAdapter.run('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
+
+      await expect(
+        faultyAdapter.runInTransaction(async (exec: any) => {
+          await exec('INSERT INTO users (name) VALUES (?)', ['alice']);
+          throw boom;
+        })
+      ).rejects.toBe(boom);
+    });
   });
 
   describe('serialized concurrent transactions', () => {

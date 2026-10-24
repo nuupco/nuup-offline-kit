@@ -64,7 +64,7 @@ describe('createSyncEngine', () => {
 
       const result = await engine.syncTable('assistants');
 
-      expect(result).toEqual({ table: 'assistants', strategy: 'replace', count: 1, syncedAt: expect.any(String) });
+      expect(result).toEqual({ table: 'assistants', strategy: 'replace', count: 1, skipped: 0, upserts: 1, deletes: 0, syncedAt: expect.any(String) });
       const { rows } = await adapter.run('SELECT id, name FROM assistants');
       expect(rows).toEqual([{ id: 2, name: 'alice' }]);
 
@@ -434,6 +434,472 @@ describe('createSyncEngine', () => {
       expect(summary.errors).toHaveLength(1);
       expect(summary.errors[0].table).toBe('assistants');
       expect(summary.results.map((r: any) => r.table)).toEqual(['threads']);
+    });
+  });
+
+  describe("syncTable — replace strategy with useShadowTable: true", () => {
+    const shadowTables: TableConfig[] = [
+      { name: 'assistants', strategy: 'replace', columns: ['id', 'name'], useShadowTable: true },
+    ];
+
+    it('swaps in new rows and preserves the schema (PRIMARY KEY still enforced after sync)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'stale')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 2, name: 'alice' }] }),
+        tables: shadowTables,
+      });
+
+      const result = await engine.syncTable('assistants');
+
+      expect(result).toEqual({ table: 'assistants', strategy: 'replace', count: 1, skipped: 0, upserts: 1, deletes: 0, syncedAt: expect.any(String) });
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 2, name: 'alice' }]);
+      await expect(adapter.run('INSERT INTO assistants (id, name) VALUES (2, \'dup\')')).rejects.toThrow();
+    });
+
+    it('leaves the original table untouched when the fetched rows violate the schema', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'stale')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 2, name: null }] }),
+        tables: shadowTables,
+      });
+
+      await expect(engine.syncTable('assistants')).rejects.toThrow();
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 1, name: 'stale' }]);
+    });
+
+    it('actually drives the shadow-table swap path, not a plain DELETE+INSERT, when useShadowTable is true', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      const executed: string[] = [];
+      const realRunInTransaction = adapter.runInTransaction.bind(adapter);
+      (adapter as any).runInTransaction = (fn: any) =>
+        realRunInTransaction((exec: any) => {
+          const recordingExec = ((sql: string, params?: unknown[], options?: unknown) => {
+            executed.push(sql);
+            return exec(sql, params, options);
+          }) as any;
+          return fn(recordingExec);
+        });
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables: shadowTables,
+      });
+      await engine.syncTable('assistants');
+
+      expect(executed.some(sql => /ALTER TABLE .* RENAME TO assistants/i.test(sql))).toBe(true);
+      expect(executed.some(sql => /CREATE TABLE assistants__shadow/i.test(sql))).toBe(true);
+      expect(executed.some(sql => /^\s*DELETE FROM assistants\s*$/i.test(sql))).toBe(false);
+    });
+
+    it('recovers via the engine when a previous crashed sync left a stale shadow table behind', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run('CREATE TABLE assistants__shadow (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants__shadow (id, name) VALUES (99, 'orphaned')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables: shadowTables,
+      });
+      await engine.syncTable('assistants');
+
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 1, name: 'alice' }]);
+    });
+  });
+
+  describe('syncTable — upsert strategy with preserveColumns', () => {
+    it('propagates preserveColumns from config through to the UPDATE SQL actually executed (not just the visible data result)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT, is_dirty INTEGER)');
+      await adapter.run("INSERT INTO assistants (id, name, is_dirty) VALUES (1, 'old', 1)");
+
+      const executed: string[] = [];
+      const realRunInTransaction = adapter.runInTransaction.bind(adapter);
+      (adapter as any).runInTransaction = (fn: any) =>
+        realRunInTransaction((exec: any) => {
+          const recordingExec = ((sql: string, params?: unknown[], options?: unknown) => {
+            executed.push(sql);
+            return exec(sql, params, options);
+          }) as any;
+          return fn(recordingExec);
+        });
+
+      const tables: TableConfig[] = [
+        {
+          name: 'assistants',
+          strategy: 'upsert',
+          primaryKey: 'id',
+          columns: ['id', 'name', 'is_dirty'],
+          preserveColumns: ['is_dirty'],
+        },
+      ];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'new', is_dirty: 0 }] }),
+        tables,
+      });
+
+      await engine.syncTable('assistants');
+
+      const insertSql = executed.find(sql => sql.startsWith('INSERT'));
+      expect(insertSql).toContain('is_dirty');
+      expect(insertSql).not.toMatch(/is_dirty = excluded\.is_dirty/);
+
+      const { rows } = await adapter.run('SELECT id, name, is_dirty FROM assistants');
+      expect(rows).toEqual([{ id: 1, name: 'new', is_dirty: 1 }]);
+    });
+  });
+
+  describe('incremental cursor (since/watermark)', () => {
+    const tables: TableConfig[] = [{ name: 'assistants', strategy: 'upsert', primaryKey: 'id', columns: ['id', 'name'] }];
+
+    it('calls fetch with since=null on the first sync', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const fetchArgs: any[] = [];
+      const remote: RemoteSource = {
+        async fetch(arg) {
+          fetchArgs.push(arg);
+          return { rows: [{ id: 1, name: 'alice' }], cursor: 'cursor-1' };
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+
+      expect(fetchArgs).toEqual([{ table: 'assistants', since: null }]);
+    });
+
+    it('persists the returned cursor and passes it back as since on the next sync', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const fetchArgs: any[] = [];
+      let call = 0;
+      const remote: RemoteSource = {
+        async fetch(arg) {
+          fetchArgs.push(arg);
+          call += 1;
+          return call === 1
+            ? { rows: [{ id: 1, name: 'alice' }], cursor: 'cursor-1' }
+            : { rows: [{ id: 2, name: 'bob' }], cursor: 'cursor-2' };
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+      await engine.syncTable('assistants');
+
+      expect(fetchArgs).toEqual([
+        { table: 'assistants', since: null },
+        { table: 'assistants', since: 'cursor-1' },
+      ]);
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBe('cursor-2');
+    });
+
+    it('keeps the previous cursor when fetch omits one (RemoteSource that does not support incremental fetch)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      let call = 0;
+      const remote: RemoteSource = {
+        async fetch() {
+          call += 1;
+          return call === 1 ? { rows: [{ id: 1, name: 'alice' }], cursor: 'cursor-1' } : [{ id: 2, name: 'bob' }];
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+      await engine.syncTable('assistants');
+
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBe('cursor-1');
+    });
+
+    it('still accepts a RemoteSource that returns a plain array (pre-cursor shape)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const remote: RemoteSource = {
+        async fetch() {
+          return [{ id: 1, name: 'alice' }];
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      const result = await engine.syncTable('assistants');
+
+      expect(result.count).toBe(1);
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBeNull();
+    });
+  });
+
+  describe('paginated fetch (async iterable of pages)', () => {
+    const tables: TableConfig[] = [{ name: 'assistants', strategy: 'upsert', primaryKey: 'id', columns: ['id', 'name'] }];
+
+    function pagedRemote(pages: ({ rows: Record<string, unknown>[]; cursor?: string | null } | Record<string, unknown>[])[]): RemoteSource {
+      return {
+        async fetch() {
+          return {
+            async *[Symbol.asyncIterator]() {
+              for (const page of pages) yield page;
+            },
+          };
+        },
+      };
+    }
+
+    it('consumes an async-iterable fetch result page by page and accumulates the total count', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const remote = pagedRemote([
+        { rows: [{ id: 1, name: 'alice' }, { id: 2, name: 'bob' }] },
+        { rows: [{ id: 3, name: 'carol' }] },
+      ]);
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      const result = await engine.syncTable('assistants');
+
+      expect(result.count).toBe(3);
+      const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+      expect(rows).toEqual([
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'bob' },
+        { id: 3, name: 'carol' },
+      ]);
+    });
+
+    it('keeps the cursor from the last page that reports one', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const remote = pagedRemote([
+        { rows: [{ id: 1, name: 'alice' }], cursor: 'page-1' },
+        { rows: [{ id: 2, name: 'bob' }] }, // no cursor reported — must not wipe page-1
+        { rows: [{ id: 3, name: 'carol' }], cursor: 'page-3' },
+      ]);
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBe('page-3');
+    });
+
+    it('applies a replace-strategy paginated fetch by accumulating all pages before the atomic swap', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (99, 'stale')");
+
+      const remote = pagedRemote([[{ id: 1, name: 'alice' }], [{ id: 2, name: 'bob' }]]);
+      const engine = createSyncEngine({
+        adapter,
+        remote,
+        tables: [{ name: 'assistants', strategy: 'replace', columns: ['id', 'name'] }],
+      });
+
+      const result = await engine.syncTable('assistants');
+
+      expect(result.count).toBe(2);
+      const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+      expect(rows).toEqual([
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'bob' },
+      ]);
+    });
+
+    it('leaves a replace-strategy table fully untouched when the page iterator fails mid-iteration', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (99, 'stale')");
+
+      const remote: RemoteSource = {
+        async fetch() {
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield [{ id: 1, name: 'alice' }];
+              yield [{ id: 2, name: 'bob' }];
+              throw new Error('page 3 fetch failed');
+            },
+          };
+        },
+      };
+      const engine = createSyncEngine({
+        adapter,
+        remote,
+        tables: [{ name: 'assistants', strategy: 'replace', columns: ['id', 'name'] }],
+      });
+
+      await expect(engine.syncTable('assistants')).rejects.toThrow('page 3 fetch failed');
+
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 99, name: 'stale' }]);
+    });
+
+    it('leaves a shadow-table replace fully untouched when the page iterator fails mid-iteration', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (99, 'stale')");
+
+      const remote: RemoteSource = {
+        async fetch() {
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield [{ id: 1, name: 'alice' }];
+              throw new Error('page 2 fetch failed');
+            },
+          };
+        },
+      };
+      const engine = createSyncEngine({
+        adapter,
+        remote,
+        tables: [{ name: 'assistants', strategy: 'replace', columns: ['id', 'name'], useShadowTable: true }],
+      });
+
+      await expect(engine.syncTable('assistants')).rejects.toThrow('page 2 fetch failed');
+
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 99, name: 'stale' }]);
+      const { rows: leftoverShadow } = await adapter.run(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name = 'assistants__shadow'`
+      );
+      expect(leftoverShadow).toHaveLength(0);
+    });
+  });
+
+  describe('observability hooks', () => {
+    const tables: TableConfig[] = [{ name: 'assistants', strategy: 'upsert', primaryKey: 'id', columns: ['id', 'name'] }];
+
+    it('reports skipped/upserts/deletes separately in SyncTableResult', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT, deleted_at TEXT)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'local-pending-edit')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({
+          assistants: [
+            { id: 1, name: 'stale-remote', deleted_at: null }, // skipped via shouldApplyRow
+            { id: 2, name: 'bob', deleted_at: null }, // upsert
+            { id: 3, name: 'carol', deleted_at: '2026-09-01T00:00:00Z' }, // delete (no-op, never existed)
+          ],
+        }),
+        tables: [
+          {
+            name: 'assistants',
+            strategy: 'upsert',
+            columns: ['id', 'name', 'deleted_at'],
+            primaryKey: 'id',
+            deletedAtColumn: 'deleted_at',
+          },
+        ],
+        hooks: { shouldApplyRow: (_table, row) => row.id !== 1 },
+      });
+
+      const result = await engine.syncTable('assistants');
+
+      expect(result.skipped).toBe(1);
+      expect(result.upserts).toBe(1);
+      expect(result.deletes).toBe(1);
+      expect(result.count).toBe(2);
+    });
+
+    it('calls onBatchComplete once per upsert batch with table/batchIndex/batchSize/durationMs', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const calls: { table: string; batchIndex: number; batchSize: number; durationMs: number }[] = [];
+      const rows = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `name-${i + 1}` }));
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: rows }),
+        tables: [{ name: 'assistants', strategy: 'upsert', columns: ['id', 'name'], primaryKey: 'id', batchSize: 4 }],
+        hooks: { onBatchComplete: info => calls.push(info) },
+      });
+
+      await engine.syncTable('assistants');
+
+      expect(calls).toHaveLength(3);
+      expect(calls.map(c => c.batchIndex)).toEqual([0, 1, 2]);
+      expect(calls.map(c => c.batchSize)).toEqual([4, 4, 2]);
+      calls.forEach(c => {
+        expect(c.table).toBe('assistants');
+        expect(typeof c.durationMs).toBe('number');
+      });
+    });
+
+    it('calls onBatchComplete once for a replace-strategy table (one logical batch per table)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const calls: { table: string; batchIndex: number; batchSize: number }[] = [];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }, { id: 2, name: 'bob' }] }),
+        tables: [{ name: 'assistants', strategy: 'replace', columns: ['id', 'name'] }],
+        hooks: { onBatchComplete: info => calls.push(info) },
+      });
+
+      await engine.syncTable('assistants');
+
+      expect(calls).toEqual([{ table: 'assistants', batchIndex: 0, batchSize: 2 }].map(c => expect.objectContaining(c)));
+    });
+
+    it('calls onSyncStart once before and onSyncComplete once after sync() processes every table', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const events: string[] = [];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables,
+        hooks: {
+          onSyncStart: () => events.push('start'),
+          onSyncComplete: summary => events.push(`complete:${summary.results.length}`),
+        },
+      });
+
+      await engine.sync();
+
+      expect(events).toEqual(['start', 'complete:1']);
+    });
+
+    it('does not call onSyncStart/onSyncComplete from syncTable() directly', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const events: string[] = [];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables,
+        hooks: {
+          onSyncStart: () => events.push('start'),
+          onSyncComplete: summary => events.push(`complete:${summary.results.length}`),
+        },
+      });
+
+      await engine.syncTable('assistants');
+
+      expect(events).toEqual([]);
     });
   });
 
