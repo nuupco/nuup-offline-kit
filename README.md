@@ -1,6 +1,6 @@
 # @nuup/offline-kit
 
-Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only sync engine, and a query/store abstraction. Written in TypeScript, compiled with plain `tsc` into a committed `dist/`.
+Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only sync engine with catalog support, and an expo-sqlite adapter. Written in TypeScript, compiled with plain `tsc` into a committed `dist/`.
 
 > Status: public on GitHub, not published to npm. Consumed by installing straight from a tagged GitHub release (or a tarball via `npm pack`) — no local build step required, since `dist/` ships in the repository.
 
@@ -9,17 +9,17 @@ Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only
 Install from a tagged release, pinned to that tag — never from `main`, since a later push there could change the API under your app without warning:
 
 ```sh
-npm install github:nuupco/nuup-offline-kit#v0.2.0 expo-sqlite
+npm install github:nuupco/nuup-offline-kit#v0.4.0 expo-sqlite
 ```
 
 Yarn / pnpm use the same `github:` spec:
 
 ```sh
-yarn add github:nuupco/nuup-offline-kit#v0.2.0 expo-sqlite
-pnpm add github:nuupco/nuup-offline-kit#v0.2.0 expo-sqlite
+yarn add github:nuupco/nuup-offline-kit#v0.4.0 expo-sqlite
+pnpm add github:nuupco/nuup-offline-kit#v0.4.0 expo-sqlite
 ```
 
-To bump the version later, update the `#v0.2.0` tag reference to the new tag and reinstall. See [Releasing a new tag](#releasing-a-new-tag) for how new tags get cut.
+To bump the version later, update the `#v0.4.0` tag reference to the new tag and reinstall. See [Releasing a new tag](#releasing-a-new-tag) for how new tags get cut.
 
 Once published to npm:
 
@@ -60,7 +60,7 @@ While this package is not yet on the npm registry, consumer apps can install it 
 npm pack
 
 # in the consumer app (e.g. mt_app_expo)
-npm install file:../nuup-offline-kit/nuup-offline-kit-0.2.0.tgz
+npm install file:../nuup-offline-kit/nuup-offline-kit-0.4.0.tgz
 ```
 
 Regenerate and reinstall the tarball whenever this package's source changes.
