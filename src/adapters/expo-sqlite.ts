@@ -100,7 +100,12 @@ export function createExpoSqliteAdapter(
         await conn.execAsync('COMMIT');
         return result;
       } catch (error) {
-        await conn.execAsync('ROLLBACK');
+        try {
+          await conn.execAsync('ROLLBACK');
+        } catch {
+          // The original error is the one the caller needs to see; a failed
+          // rollback (e.g. connection already closed) must never replace it.
+        }
         throw error;
       }
     });

@@ -89,7 +89,16 @@ export interface UpsertTableConfig extends BaseTableConfig {
 export type TableConfig = ReplaceTableConfig | UpsertTableConfig;
 
 export interface RemoteSource {
-  fetch(arg: { table: string }): Promise<Record<string, unknown>[]>;
+  /**
+   * `since` is the cursor persisted from this table's previous sync (`null`
+   * on the first sync, or whenever no cursor was recorded). A RemoteSource
+   * that doesn't support incremental fetching can ignore it and always
+   * return the full set. `cursor` in the result, when present, is persisted
+   * to `_nuup_sync_state` and passed back as `since` on the next sync.
+   */
+  fetch(arg: { table: string; since?: string | null }): Promise<
+    Record<string, unknown>[] | { rows: Record<string, unknown>[]; cursor?: string | null }
+  >;
 }
 
 export interface SyncTableResult {
@@ -102,6 +111,7 @@ export interface SyncTableResult {
 export interface SyncState {
   syncedAt: string;
   rowCount: number;
+  cursor: string | null;
 }
 
 export interface SyncHooks {

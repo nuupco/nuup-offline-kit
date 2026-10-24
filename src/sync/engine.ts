@@ -11,7 +11,7 @@ import type {
 } from '../types';
 import { validateSyncTables } from './validate';
 import { applyReplace, applyUpsert, chunk, DEFAULT_BATCH_SIZE } from './apply';
-import { DEFAULT_SYNC_STATE_TABLE, ensureSyncStateTable, readAllSyncState, recordSyncState } from './state';
+import { DEFAULT_SYNC_STATE_TABLE, ensureSyncStateTable, readAllSyncState, readSyncState, recordSyncState } from './state';
 
 export function createSyncEngine({
   adapter,
@@ -43,6 +43,18 @@ export function createSyncEngine({
     return applyReplace(exec, table, rows);
   }
 
+  // `cursor: undefined` means "this fetch call didn't report a cursor" (either
+  // a plain-array result, or an object that omitted it) — in that case the
+  // previously persisted cursor must be kept, not wiped to null.
+  function normalizeFetchResult(
+    result: Record<string, unknown>[] | { rows: Record<string, unknown>[]; cursor?: string | null }
+  ): { rows: Record<string, unknown>[]; cursor: string | null | undefined } {
+    if (Array.isArray(result)) {
+      return { rows: result, cursor: undefined };
+    }
+    return { rows: result.rows, cursor: result.cursor };
+  }
+
   // Each batch commits in its own short transaction instead of one
   // transaction for the whole table: on a large pull, holding a single
   // transaction open for thousands of rows blocks every other write on the
@@ -53,7 +65,8 @@ export function createSyncEngine({
   async function syncUpsertTable(
     table: UpsertTableConfig,
     name: string,
-    rows: Record<string, unknown>[]
+    rows: Record<string, unknown>[],
+    cursor: string | null
   ): Promise<number> {
     const applicableRows = shouldApplyRow ? rows.filter(row => shouldApplyRow(name, row)) : rows;
     const batches = chunk(applicableRows, table.batchSize ?? DEFAULT_BATCH_SIZE);
@@ -61,7 +74,7 @@ export function createSyncEngine({
     for (const batch of batches) {
       count += await adapter.runInTransaction(exec => applyUpsert(exec, table, batch));
     }
-    await adapter.runInTransaction(exec => recordSyncState(exec, syncStateTable, name, count));
+    await adapter.runInTransaction(exec => recordSyncState(exec, syncStateTable, name, count, cursor));
     return count;
   }
 
@@ -76,17 +89,20 @@ export function createSyncEngine({
     if (onTableStart) onTableStart(name);
 
     try {
-      const rows = await remote.fetch({ table: name });
+      const previousCursor = (await readSyncState(adapter.run, syncStateTable, name))?.cursor ?? null;
+      const fetched = await remote.fetch({ table: name, since: previousCursor });
+      const { rows, cursor: fetchedCursor } = normalizeFetchResult(fetched);
+      const cursor = fetchedCursor === undefined ? previousCursor : fetchedCursor;
 
       const result =
         table.strategy === 'upsert'
-          ? await syncUpsertTable(table, name, rows)
+          ? await syncUpsertTable(table, name, rows, cursor)
           : await adapter.runInTransaction(async exec => {
               const count = await applyReplaceTable(exec, table as ReplaceTableConfig, rows);
               if (count === -1) {
                 return null;
               }
-              await recordSyncState(exec, syncStateTable, name, count);
+              await recordSyncState(exec, syncStateTable, name, count, cursor);
               return count;
             });
 

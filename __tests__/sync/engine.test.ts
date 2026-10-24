@@ -437,6 +437,90 @@ describe('createSyncEngine', () => {
     });
   });
 
+  describe('incremental cursor (since/watermark)', () => {
+    const tables: TableConfig[] = [{ name: 'assistants', strategy: 'upsert', primaryKey: 'id', columns: ['id', 'name'] }];
+
+    it('calls fetch with since=null on the first sync', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const fetchArgs: any[] = [];
+      const remote: RemoteSource = {
+        async fetch(arg) {
+          fetchArgs.push(arg);
+          return { rows: [{ id: 1, name: 'alice' }], cursor: 'cursor-1' };
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+
+      expect(fetchArgs).toEqual([{ table: 'assistants', since: null }]);
+    });
+
+    it('persists the returned cursor and passes it back as since on the next sync', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const fetchArgs: any[] = [];
+      let call = 0;
+      const remote: RemoteSource = {
+        async fetch(arg) {
+          fetchArgs.push(arg);
+          call += 1;
+          return call === 1
+            ? { rows: [{ id: 1, name: 'alice' }], cursor: 'cursor-1' }
+            : { rows: [{ id: 2, name: 'bob' }], cursor: 'cursor-2' };
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+      await engine.syncTable('assistants');
+
+      expect(fetchArgs).toEqual([
+        { table: 'assistants', since: null },
+        { table: 'assistants', since: 'cursor-1' },
+      ]);
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBe('cursor-2');
+    });
+
+    it('keeps the previous cursor when fetch omits one (RemoteSource that does not support incremental fetch)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      let call = 0;
+      const remote: RemoteSource = {
+        async fetch() {
+          call += 1;
+          return call === 1 ? { rows: [{ id: 1, name: 'alice' }], cursor: 'cursor-1' } : [{ id: 2, name: 'bob' }];
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await engine.syncTable('assistants');
+      await engine.syncTable('assistants');
+
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBe('cursor-1');
+    });
+
+    it('still accepts a RemoteSource that returns a plain array (pre-cursor shape)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+      const remote: RemoteSource = {
+        async fetch() {
+          return [{ id: 1, name: 'alice' }];
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      const result = await engine.syncTable('assistants');
+
+      expect(result.count).toBe(1);
+      const state = await engine.getSyncState();
+      expect(state.get('assistants')?.cursor).toBeNull();
+    });
+  });
+
   describe('Hermes/static boundary', () => {
     it('the engine module only references the adapter contract, no Node-core import', () => {
       // eslint-disable-next-line global-require
