@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.5.0]
+
 ### Added
 
 - Incremental pull: `RemoteSource.fetch` now receives `since` (the table's
