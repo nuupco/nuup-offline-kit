@@ -94,6 +94,14 @@ export async function ensurePushOutboxTable(adapter: Adapter, pushStateTable: st
   );
 }
 
+/**
+ * Known limitations:
+ * - A mutation whose `dependsOn` points to an id that never existed (typo,
+ *   or never enqueued) stays pending forever with no error or signal.
+ * - Re-`enqueue`ing a mutation already in `failed` status is a silent no-op
+ *   (the upsert only applies while status is `pending`); there is no way to
+ *   retry a failed mutation by calling `enqueue` again with the same id.
+ */
 export function createPushEngine({
   adapter,
   pushStateTable = DEFAULT_PUSH_OUTBOX_TABLE,
@@ -152,8 +160,12 @@ export function createPushEngine({
     return state;
   }
 
-  async function markInFlight(exec: ScopedExec, id: string): Promise<void> {
-    await exec(`UPDATE ${pushStateTable} SET status = 'in_flight' WHERE id = ?`, [id]);
+  async function tryClaimInFlight(exec: ScopedExec, id: string): Promise<boolean> {
+    const { rowsAffected } = await exec(
+      `UPDATE ${pushStateTable} SET status = 'in_flight' WHERE id = ? AND status = 'pending'`,
+      [id]
+    );
+    return rowsAffected > 0;
   }
 
   async function markDone(exec: ScopedExec, id: string): Promise<void> {
@@ -192,7 +204,12 @@ export function createPushEngine({
     const candidates = rows.map(rowToMutation);
 
     for (const mutation of candidates) {
-      await adapter.runInTransaction(exec => markInFlight(exec, mutation.id));
+      // Atomic, conditional claim: only proceeds if this mutation is still
+      // 'pending' at claim time. If a concurrent processQueue() already
+      // claimed it (rowsAffected === 0), skip it entirely — it belongs to
+      // the other invocation now, and we must not call send() for it.
+      const claimed = await adapter.runInTransaction(exec => tryClaimInFlight(exec, mutation.id));
+      if (!claimed) continue;
       if (onMutationStart) onMutationStart(mutation);
 
       try {

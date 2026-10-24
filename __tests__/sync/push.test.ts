@@ -171,6 +171,25 @@ describe('sync/push', () => {
     expect(state.pending).toBe(0);
   });
 
+  it('does not send the same pending mutation twice when processQueue runs concurrently', async () => {
+    const adapter = makeAdapter();
+    const engine = createPushEngine({ adapter });
+    await engine.enqueue({ id: 'm1', type: 'create_parcela', payload: {} });
+
+    let sendCount = 0;
+    const send = jest.fn(async () => {
+      sendCount++;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return { ok: true };
+    });
+
+    await Promise.all([engine.processQueue({ send }), engine.processQueue({ send })]);
+
+    expect(sendCount).toBe(1);
+    const done = await engine.listByStatus('done');
+    expect(done).toHaveLength(1);
+  });
+
   it('calls onMutationStart and onMutationDone hooks', async () => {
     const adapter = makeAdapter();
     const onMutationStart = jest.fn();

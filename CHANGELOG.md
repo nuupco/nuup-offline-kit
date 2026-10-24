@@ -53,7 +53,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   inspection (e.g. a "N changes pending to upload" UI). Optional
   `onMutationStart`/`onMutationDone`/`onMutationFailed` hooks mirror the
   style of `SyncHooks`. The kit knows nothing about HTTP — `send` is
-  entirely the caller's responsibility.
+  entirely the caller's responsibility. Known limitations: a mutation whose
+  `dependsOn` points to an id that never existed stays pending forever with
+  no error; re-`enqueue`ing an already-`failed` mutation is a silent no-op
+  (no built-in way to retry a failed mutation by id).
 
 ### Fixed
 
