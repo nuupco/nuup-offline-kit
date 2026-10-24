@@ -112,16 +112,32 @@ export interface RemoteSource {
    * that doesn't support incremental fetching can ignore it and always
    * return the full set. `cursor` in the result, when present, is persisted
    * to `_nuup_sync_state` and passed back as `since` on the next sync.
+   *
+   * `fetch` may also return an async iterable of pages instead of a single
+   * `rows`/`cursor` shape (a single page). This is additive: an existing
+   * `fetch` that returns a plain array or `{rows, cursor}` keeps working
+   * unchanged; only a result that is neither an array nor has a `rows`
+   * property, and exposes `Symbol.asyncIterator`/`Symbol.iterator`, is
+   * treated as a page sequence.
    */
   fetch(arg: { table: string; since?: string | null }): Promise<
-    Record<string, unknown>[] | { rows: Record<string, unknown>[]; cursor?: string | null }
+    | Record<string, unknown>[]
+    | { rows: Record<string, unknown>[]; cursor?: string | null }
+    | AsyncIterable<Record<string, unknown>[] | { rows: Record<string, unknown>[]; cursor?: string | null }>
   >;
 }
 
 export interface SyncTableResult {
   table: string;
   strategy: TableConfig['strategy'];
+  /** Total rows applied this sync (upserts + deletes for 'upsert', all inserted rows for 'replace'). */
   count: number;
+  /** Rows discarded by `shouldApplyRow`. Always 0 for 'replace' (hook only applies to 'upsert'). */
+  skipped: number;
+  /** INSERT/UPDATE rows among `count`. For 'replace', equals `count` (no tombstones there). */
+  upserts: number;
+  /** DELETE (tombstone) rows among `count`. Always 0 for 'replace'. */
+  deletes: number;
   syncedAt: string;
 }
 
@@ -144,6 +160,20 @@ export interface SyncHooks {
    * sync pass since this engine has no per-row cursor or ack.
    */
   shouldApplyRow?(table: string, row: Record<string, unknown>): boolean;
+  /**
+   * Called after each batch of rows is applied and committed. For 'upsert'
+   * tables this fires once per chunk of `batchSize` rows (and once per
+   * fetched page when the remote streams pages). For 'replace'/shadow tables
+   * it fires once per table, since the whole payload is applied atomically
+   * in a single DELETE+INSERT (or shadow swap) transaction — `batchSize` is
+   * still honored internally for the multi-row INSERT statements, but there
+   * is only one logical "batch" to report.
+   */
+  onBatchComplete?(info: { table: string; batchIndex: number; batchSize: number; durationMs: number }): void;
+  /** Called once before `sync()` starts processing any table. Not called by `syncTable()` directly. */
+  onSyncStart?(): void;
+  /** Called once after `sync()` finishes processing every table. Not called by `syncTable()` directly. */
+  onSyncComplete?(summary: SyncSummary): void;
 }
 
 export interface SyncEngineConfig {

@@ -32,6 +32,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   should only ever be seeded once. Must each be listed in `columns`; only
   supported for the `upsert` strategy. If `preserveColumns` leaves no column
   to update, the upsert falls back to `ON CONFLICT ... DO NOTHING`.
+- Write batching: `applyReplace`, `applyReplaceShadow`, and `applyUpsert` now
+  send one multi-row `INSERT ... VALUES (...), (...)` per batch instead of
+  one `INSERT` per row, cutting adapter roundtrips. For `applyUpsert`,
+  consecutive non-tombstoned rows with distinct primary keys are grouped
+  into one statement; a tombstoned row still runs its own `DELETE`, and a
+  run breaks early if the same primary key would otherwise appear twice in
+  one multi-row statement (SQLite only resolves `ON CONFLICT` against rows
+  that existed before the statement ran). Behavior and row counts are
+  unchanged — this only reduces the number of SQL statements executed.
+- Paginated pull: `RemoteSource.fetch` may now additionally return an async
+  iterable of pages (each page the same `Row[]` or `{ rows, cursor }` shape
+  as before) instead of a single result. The engine consumes pages with
+  `for await`, applying each one incrementally (same batching as before) for
+  `upsert` tables, and keeps the cursor from the last page that reports one.
+  `replace`-strategy tables accumulate all pages before their atomic
+  DELETE+INSERT/shadow swap, since that strategy can't apply partially. This
+  is additive: a `fetch` returning a plain array or `{ rows, cursor }` keeps
+  working unchanged.
+- Observability hooks: `SyncHooks.onBatchComplete({ table, batchIndex,
+  batchSize, durationMs })` fires after each committed batch (once per
+  `batchSize` chunk for `upsert`, once per table for `replace`/shadow, since
+  that strategy has only one logical batch). `SyncHooks.onSyncStart()` and
+  `SyncHooks.onSyncComplete(summary)` fire once around `sync()` (not
+  `syncTable()`).
 
 - `createPushEngine({ adapter, pushStateTable?, maxAttempts?, backoff?, baseDelayMs?, maxBackoffMs?, hooks? })`:
   a generic outbox/push engine for queuing local mutations to send to a
@@ -57,6 +81,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `dependsOn` points to an id that never existed stays pending forever with
   no error; re-`enqueue`ing an already-`failed` mutation is a silent no-op
   (no built-in way to retry a failed mutation by id).
+
+### Changed
+
+- `SyncTableResult` gained `skipped` (rows discarded by `shouldApplyRow`,
+  always `0` for `replace`), `upserts` (INSERT/UPDATE rows), and `deletes`
+  (tombstone DELETE rows, always `0` for `replace`). `count` keeps its prior
+  meaning — the total rows applied (`upserts + deletes`) — so existing code
+  reading only `count` is unaffected.
 
 ### Fixed
 
