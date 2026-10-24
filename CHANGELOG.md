@@ -33,6 +33,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   supported for the `upsert` strategy. If `preserveColumns` leaves no column
   to update, the upsert falls back to `ON CONFLICT ... DO NOTHING`.
 
+- `createPushEngine({ adapter, pushStateTable?, maxAttempts?, backoff?, baseDelayMs?, maxBackoffMs?, hooks? })`:
+  a generic outbox/push engine for queuing local mutations to send to a
+  server. `enqueue(mutation)` inserts a `{ id, type, payload, dependsOn? }`
+  mutation as `pending` (idempotent by `id`: re-enqueuing a still-`pending`
+  mutation refreshes its payload/dependsOn; a mutation already
+  `in_flight`/`done`/`failed` is left untouched). `processQueue({ send })`
+  picks up `pending` mutations whose `dependsOn` (if any) is already `done`
+  and whose backoff window has elapsed, marks each `in_flight`, calls the
+  caller-supplied `send(mutation)`, and on success marks it `done` or on
+  failure increments `attempts` and either reschedules it with exponential
+  backoff (`2^attempts * baseDelayMs`, capped at `maxBackoffMs`, both
+  configurable, or a fully custom `backoff(attempts)` function) or marks it
+  `failed` once `maxAttempts` (default 5) is reached. A mutation with an
+  unresolved `dependsOn` is skipped, never failed. State is persisted in a
+  new bookkeeping table (default `_nuup_push_outbox`, configurable via
+  `pushStateTable`), auto-created via `ensurePushOutboxTable`.
+  `listByStatus(status)` and `getQueueState()` expose the queue for
+  inspection (e.g. a "N changes pending to upload" UI). Optional
+  `onMutationStart`/`onMutationDone`/`onMutationFailed` hooks mirror the
+  style of `SyncHooks`. The kit knows nothing about HTTP — `send` is
+  entirely the caller's responsibility.
+
 ### Fixed
 
 - `createExpoSqliteAdapter`'s transaction rollback no longer masks the
