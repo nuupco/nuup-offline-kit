@@ -10,7 +10,7 @@ import type {
   UpsertTableConfig,
 } from '../types';
 import { validateSyncTables } from './validate';
-import { applyReplace, applyUpsert, chunk, DEFAULT_BATCH_SIZE } from './apply';
+import { applyReplace, applyReplaceShadow, applyUpsert, chunk, DEFAULT_BATCH_SIZE } from './apply';
 import { DEFAULT_SYNC_STATE_TABLE, ensureSyncStateTable, readAllSyncState, readSyncState, recordSyncState } from './state';
 
 export function createSyncEngine({
@@ -40,7 +40,7 @@ export function createSyncEngine({
     if (rows.length === 0 && !table.allowEmpty) {
       return -1; // sentinel: no-op, caller must not write sync-state
     }
-    return applyReplace(exec, table, rows);
+    return table.useShadowTable ? applyReplaceShadow(exec, table, rows) : applyReplace(exec, table, rows);
   }
 
   // `cursor: undefined` means "this fetch call didn't report a cursor" (either

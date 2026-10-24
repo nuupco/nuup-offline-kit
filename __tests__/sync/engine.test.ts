@@ -437,6 +437,90 @@ describe('createSyncEngine', () => {
     });
   });
 
+  describe("syncTable — replace strategy with useShadowTable: true", () => {
+    const shadowTables: TableConfig[] = [
+      { name: 'assistants', strategy: 'replace', columns: ['id', 'name'], useShadowTable: true },
+    ];
+
+    it('swaps in new rows and preserves the schema (PRIMARY KEY still enforced after sync)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'stale')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 2, name: 'alice' }] }),
+        tables: shadowTables,
+      });
+
+      const result = await engine.syncTable('assistants');
+
+      expect(result).toEqual({ table: 'assistants', strategy: 'replace', count: 1, syncedAt: expect.any(String) });
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 2, name: 'alice' }]);
+      await expect(adapter.run('INSERT INTO assistants (id, name) VALUES (2, \'dup\')')).rejects.toThrow();
+    });
+
+    it('leaves the original table untouched when the fetched rows violate the schema', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'stale')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 2, name: null }] }),
+        tables: shadowTables,
+      });
+
+      await expect(engine.syncTable('assistants')).rejects.toThrow();
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 1, name: 'stale' }]);
+    });
+
+    it('actually drives the shadow-table swap path, not a plain DELETE+INSERT, when useShadowTable is true', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      const executed: string[] = [];
+      const realRunInTransaction = adapter.runInTransaction.bind(adapter);
+      (adapter as any).runInTransaction = (fn: any) =>
+        realRunInTransaction((exec: any) => {
+          const recordingExec = ((sql: string, params?: unknown[], options?: unknown) => {
+            executed.push(sql);
+            return exec(sql, params, options);
+          }) as any;
+          return fn(recordingExec);
+        });
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables: shadowTables,
+      });
+      await engine.syncTable('assistants');
+
+      expect(executed.some(sql => /ALTER TABLE .* RENAME TO assistants/i.test(sql))).toBe(true);
+      expect(executed.some(sql => /CREATE TABLE assistants__shadow/i.test(sql))).toBe(true);
+      expect(executed.some(sql => /^\s*DELETE FROM assistants\s*$/i.test(sql))).toBe(false);
+    });
+
+    it('recovers via the engine when a previous crashed sync left a stale shadow table behind', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run('CREATE TABLE assistants__shadow (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+      await adapter.run("INSERT INTO assistants__shadow (id, name) VALUES (99, 'orphaned')");
+
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'alice' }] }),
+        tables: shadowTables,
+      });
+      await engine.syncTable('assistants');
+
+      const { rows } = await adapter.run('SELECT id, name FROM assistants');
+      expect(rows).toEqual([{ id: 1, name: 'alice' }]);
+    });
+  });
+
   describe('incremental cursor (since/watermark)', () => {
     const tables: TableConfig[] = [{ name: 'assistants', strategy: 'upsert', primaryKey: 'id', columns: ['id', 'name'] }];
 

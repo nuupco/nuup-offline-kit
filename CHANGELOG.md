@@ -16,6 +16,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   keep working unchanged — they just don't get incremental cursors.
 - `_nuup_sync_state` gained a `cursor` column (auto-migrated in place via
   `ensureSyncStateTable` for tables created by older versions).
+- `ReplaceTableConfig.useShadowTable`: opt-in shadow-table swap for the
+  `replace` strategy (`${table.name}__shadow`, built from the table's own
+  `sqlite_master` schema, then atomically swapped in). Default is `false`,
+  keeping the existing DELETE+INSERT behavior unless opted in. Recovers
+  automatically from a leftover shadow table left by a previously
+  interrupted sync. Known limitation: indexes/triggers declared via separate
+  `CREATE INDEX`/`CREATE TRIGGER` statements are not recreated on the new
+  table.
 
 ### Fixed
 

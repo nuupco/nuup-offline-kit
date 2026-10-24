@@ -66,6 +66,18 @@ describe('validateSyncTables', () => {
     ).toThrow(/strategy/);
   });
 
+  it('propagates useShadowTable through for a replace-strategy table', () => {
+    const tables = validateSyncTables([
+      { name: 'assistants', strategy: 'replace', columns: ['id'], useShadowTable: true },
+    ]);
+    expect((tables[0] as any).useShadowTable).toBe(true);
+  });
+
+  it('omits useShadowTable from the normalized config when not given', () => {
+    const tables = validateSyncTables([{ name: 'assistants', strategy: 'replace', columns: ['id'] }]);
+    expect('useShadowTable' in tables[0]).toBe(false);
+  });
+
   describe('deletedAtColumn', () => {
     it('throws a descriptive error when deletedAtColumn is not included in columns', () => {
       expect(() =>

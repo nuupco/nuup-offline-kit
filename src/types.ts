@@ -73,6 +73,14 @@ export interface ReplaceTableConfig extends BaseTableConfig {
   strategy: 'replace';
   primaryKey?: string;
   allowEmpty?: boolean;
+  /**
+   * When true, replace via a shadow-table swap (build `${name}__shadow` with
+   * the table's existing schema, insert into it, then atomically swap it in)
+   * instead of DELETE+INSERT. Avoids leaving the table empty if interrupted
+   * mid-sync. The table must already exist (created by a migration). Default
+   * false, to keep existing DELETE+INSERT behavior unless opted in.
+   */
+  useShadowTable?: boolean;
 }
 
 export interface UpsertTableConfig extends BaseTableConfig {

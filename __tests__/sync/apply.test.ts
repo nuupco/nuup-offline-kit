@@ -1,6 +1,6 @@
 import { createFakeExpoSqliteDb } from '../helpers/fake-expo-sqlite';
 import { createExpoSqliteAdapter } from '../../src/adapters/expo-sqlite';
-import { chunk, applyReplace, applyUpsert } from '../../src/sync/apply';
+import { chunk, applyReplace, applyReplaceShadow, applyUpsert } from '../../src/sync/apply';
 import type { ReplaceTableConfig, ScopedExec, UpsertTableConfig } from '../../src/types';
 
 function recordingExec(exec: ScopedExec): { exec: ScopedExec; sqls: string[] } {
@@ -56,6 +56,77 @@ describe('applyReplace', () => {
       { id: 2, name: 'alice' },
       { id: 3, name: 'bob' },
     ]);
+  });
+});
+
+describe('applyReplaceShadow', () => {
+  const table: ReplaceTableConfig = { name: 'assistants', strategy: 'replace', columns: ['id', 'name'] };
+
+  it('swaps in the new rows and preserves the original schema (PRIMARY KEY still enforced)', async () => {
+    const adapter = makeAdapter();
+    await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'stale')");
+
+    const count = await adapter.runInTransaction(exec =>
+      applyReplaceShadow(exec, table, [
+        { id: 2, name: 'alice' },
+        { id: 3, name: 'bob' },
+      ])
+    );
+
+    expect(count).toBe(2);
+    const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+    expect(rows).toEqual([
+      { id: 2, name: 'alice' },
+      { id: 3, name: 'bob' },
+    ]);
+
+    // PRIMARY KEY constraint from the original schema must survive the swap.
+    await expect(adapter.run('INSERT INTO assistants (id, name) VALUES (2, \'dup\')')).rejects.toThrow();
+    // NOT NULL constraint from the original schema must survive the swap.
+    await expect(adapter.run('INSERT INTO assistants (id, name) VALUES (4, NULL)')).rejects.toThrow();
+  });
+
+  it('leaves the original table fully intact when a write fails mid-swap (no half-applied state)', async () => {
+    const adapter = makeAdapter();
+    await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    await adapter.run("INSERT INTO assistants (id, name) VALUES (1, 'stale')");
+
+    await expect(
+      adapter.runInTransaction(exec =>
+        applyReplaceShadow(exec, table, [
+          { id: 2, name: 'alice' },
+          { id: 3, name: null }, // violates NOT NULL — must abort the whole swap
+        ])
+      )
+    ).rejects.toThrow();
+
+    const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+    expect(rows).toEqual([{ id: 1, name: 'stale' }]);
+    const { rows: leftoverShadow } = await adapter.run(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name = 'assistants__shadow'`
+    );
+    expect(leftoverShadow).toHaveLength(0);
+  });
+
+  it('recovers cleanly from a leftover shadow table left by a previous crashed run', async () => {
+    const adapter = makeAdapter();
+    await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    await adapter.run('CREATE TABLE assistants__shadow (id INTEGER PRIMARY KEY, name TEXT NOT NULL)');
+    await adapter.run("INSERT INTO assistants__shadow (id, name) VALUES (99, 'orphaned')");
+
+    const count = await adapter.runInTransaction(exec => applyReplaceShadow(exec, table, [{ id: 1, name: 'alice' }]));
+
+    expect(count).toBe(1);
+    const { rows } = await adapter.run('SELECT id, name FROM assistants');
+    expect(rows).toEqual([{ id: 1, name: 'alice' }]);
+  });
+
+  it('throws a descriptive error when the target table does not exist yet', async () => {
+    const adapter = makeAdapter();
+    await expect(adapter.runInTransaction(exec => applyReplaceShadow(exec, table, []))).rejects.toThrow(
+      /does not exist|assistants/
+    );
   });
 });
 

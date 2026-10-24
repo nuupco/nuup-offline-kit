@@ -19,7 +19,7 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
       throw new Error(`table config at index ${index} must be an object`);
     }
 
-    const { name, strategy, columns, primaryKey, batchSize, allowEmpty, deletedAtColumn } =
+    const { name, strategy, columns, primaryKey, batchSize, allowEmpty, deletedAtColumn, useShadowTable } =
       table as Record<string, unknown>;
 
     assertIdentifier(name, `tables[${index}].name`);
@@ -85,6 +85,7 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
       ...(primaryKey !== undefined ? { primaryKey: primaryKey as string } : {}),
       ...(allowEmpty !== undefined ? { allowEmpty: allowEmpty as boolean } : {}),
       ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
+      ...(useShadowTable !== undefined ? { useShadowTable: useShadowTable as boolean } : {}),
     };
   });
 }
