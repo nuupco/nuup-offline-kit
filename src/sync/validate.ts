@@ -19,7 +19,7 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
       throw new Error(`table config at index ${index} must be an object`);
     }
 
-    const { name, strategy, columns, primaryKey, batchSize, allowEmpty, deletedAtColumn, useShadowTable } =
+    const { name, strategy, columns, primaryKey, batchSize, allowEmpty, deletedAtColumn, useShadowTable, preserveColumns } =
       table as Record<string, unknown>;
 
     assertIdentifier(name, `tables[${index}].name`);
@@ -40,6 +40,12 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
     if (strategy === 'replace' && deletedAtColumn !== undefined) {
       throw new Error(
         `tables[${index}] ("${name}") deletedAtColumn is not supported for strategy "replace"`
+      );
+    }
+
+    if (strategy === 'replace' && preserveColumns !== undefined) {
+      throw new Error(
+        `tables[${index}] ("${name}") preserveColumns is not supported for strategy "replace"`
       );
     }
 
@@ -64,6 +70,22 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
           );
         }
       }
+      if (preserveColumns !== undefined) {
+        if (!Array.isArray(preserveColumns)) {
+          throw new Error(`tables[${index}] ("${name}") preserveColumns must be an array of column names`);
+        }
+        preserveColumns.forEach((column, columnIndex) =>
+          assertIdentifier(column, `tables[${index}].preserveColumns[${columnIndex}]`)
+        );
+        preserveColumns.forEach(column => {
+          if (!columns.includes(column)) {
+            throw new Error(
+              `tables[${index}] ("${name}") preserveColumns "${column}" must be included in "columns"`
+            );
+          }
+        });
+      }
+
       return {
         name: name as string,
         strategy: 'upsert',
@@ -71,6 +93,7 @@ export function validateSyncTables(tables: unknown): TableConfig[] {
         primaryKey,
         ...(batchSize !== undefined ? { batchSize: batchSize as number } : {}),
         ...(deletedAtColumn !== undefined ? { deletedAtColumn: deletedAtColumn as string } : {}),
+        ...(preserveColumns !== undefined ? { preserveColumns: preserveColumns as string[] } : {}),
       };
     }
 

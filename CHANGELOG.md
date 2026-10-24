@@ -24,6 +24,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   interrupted sync. Known limitation: indexes/triggers declared via separate
   `CREATE INDEX`/`CREATE TRIGGER` statements are not recreated on the new
   table.
+- `UpsertTableConfig.preserveColumns`: columns listed here still receive
+  their given value on `INSERT` (new row) but are excluded from the `SET`
+  clause of `ON CONFLICT ... DO UPDATE` (existing row keeps its current
+  local value instead of being overwritten by the synced value). Useful for
+  local bookkeeping columns (e.g. a dirty flag or local-edit timestamp) that
+  should only ever be seeded once. Must each be listed in `columns`; only
+  supported for the `upsert` strategy. If `preserveColumns` leaves no column
+  to update, the upsert falls back to `ON CONFLICT ... DO NOTHING`.
 
 ### Fixed
 

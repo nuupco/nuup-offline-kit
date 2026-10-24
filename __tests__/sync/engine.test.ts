@@ -521,6 +521,49 @@ describe('createSyncEngine', () => {
     });
   });
 
+  describe('syncTable — upsert strategy with preserveColumns', () => {
+    it('propagates preserveColumns from config through to the UPDATE SQL actually executed (not just the visible data result)', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT, is_dirty INTEGER)');
+      await adapter.run("INSERT INTO assistants (id, name, is_dirty) VALUES (1, 'old', 1)");
+
+      const executed: string[] = [];
+      const realRunInTransaction = adapter.runInTransaction.bind(adapter);
+      (adapter as any).runInTransaction = (fn: any) =>
+        realRunInTransaction((exec: any) => {
+          const recordingExec = ((sql: string, params?: unknown[], options?: unknown) => {
+            executed.push(sql);
+            return exec(sql, params, options);
+          }) as any;
+          return fn(recordingExec);
+        });
+
+      const tables: TableConfig[] = [
+        {
+          name: 'assistants',
+          strategy: 'upsert',
+          primaryKey: 'id',
+          columns: ['id', 'name', 'is_dirty'],
+          preserveColumns: ['is_dirty'],
+        },
+      ];
+      const engine = createSyncEngine({
+        adapter,
+        remote: makeRemote({ assistants: [{ id: 1, name: 'new', is_dirty: 0 }] }),
+        tables,
+      });
+
+      await engine.syncTable('assistants');
+
+      const insertSql = executed.find(sql => sql.startsWith('INSERT'));
+      expect(insertSql).toContain('is_dirty');
+      expect(insertSql).not.toMatch(/is_dirty = excluded\.is_dirty/);
+
+      const { rows } = await adapter.run('SELECT id, name, is_dirty FROM assistants');
+      expect(rows).toEqual([{ id: 1, name: 'new', is_dirty: 1 }]);
+    });
+  });
+
   describe('incremental cursor (since/watermark)', () => {
     const tables: TableConfig[] = [{ name: 'assistants', strategy: 'upsert', primaryKey: 'id', columns: ['id', 'name'] }];
 

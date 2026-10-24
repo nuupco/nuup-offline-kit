@@ -129,8 +129,9 @@ export async function applyUpsert(
   if (rows.length === 0) return 0;
 
   const placeholders = `(${columns.map(() => '?').join(', ')})`;
+  const preserveColumns = new Set(table.preserveColumns ?? []);
   const updateAssignments = columns
-    .filter(column => column !== primaryKey)
+    .filter(column => column !== primaryKey && !preserveColumns.has(column))
     .map(column => `${column} = excluded.${column}`)
     .join(', ');
   const insertSql =

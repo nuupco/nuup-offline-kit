@@ -92,6 +92,15 @@ export interface UpsertTableConfig extends BaseTableConfig {
    * DELETEd instead of upserted. Must be listed in `columns`. Upsert-only.
    */
   deletedAtColumn?: string;
+  /**
+   * Columns that should receive their normal value on INSERT (new row) but be
+   * excluded from the `SET` clause of `ON CONFLICT ... DO UPDATE` (existing
+   * row keeps its current local value). Useful for local bookkeeping columns
+   * (e.g. a dirty flag or local-edit timestamp) that should only ever be
+   * seeded once, never overwritten by a later sync. Must each be listed in
+   * `columns`. Upsert-only.
+   */
+  preserveColumns?: string[];
 }
 
 export type TableConfig = ReplaceTableConfig | UpsertTableConfig;

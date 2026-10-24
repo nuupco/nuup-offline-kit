@@ -424,4 +424,70 @@ describe('applyUpsert', () => {
       ).rejects.toThrow(/missing primaryKey/i);
     });
   });
+
+  describe('applyUpsert — preserveColumns', () => {
+    it('sets preserveColumns to their given value on INSERT, but excludes them from the UPDATE SET clause', async () => {
+      const adapter = makeAdapter();
+      await adapter.run(
+        'CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT, is_dirty INTEGER)'
+      );
+      await adapter.run("INSERT INTO assistants (id, name, is_dirty) VALUES (1, 'old-name', 1)");
+
+      const tableWithPreserve: UpsertTableConfig = {
+        name: 'assistants',
+        strategy: 'upsert',
+        columns: ['id', 'name', 'is_dirty'],
+        primaryKey: 'id',
+        preserveColumns: ['is_dirty'],
+      };
+
+      let sqls: string[] = [];
+      await adapter.runInTransaction(exec => {
+        const recording = recordingExec(exec);
+        sqls = recording.sqls;
+        return applyUpsert(recording.exec, tableWithPreserve, [
+          { id: 1, name: 'new-name', is_dirty: 0 }, // existing row: is_dirty must be preserved (stays 1)
+          { id: 2, name: 'bob', is_dirty: 0 }, // new row: is_dirty gets its given default (0)
+        ]);
+      });
+
+      const insertSql = sqls.find(sql => sql.startsWith('INSERT'));
+      expect(insertSql).toContain('is_dirty');
+      expect(insertSql).not.toMatch(/is_dirty = excluded\.is_dirty/);
+      expect(insertSql).toContain('name = excluded.name');
+
+      const { rows } = await adapter.run('SELECT id, name, is_dirty FROM assistants ORDER BY id');
+      expect(rows).toEqual([
+        { id: 1, name: 'new-name', is_dirty: 1 }, // preserved, not overwritten
+        { id: 2, name: 'bob', is_dirty: 0 }, // seeded on insert
+      ]);
+    });
+
+    it('falls back to DO NOTHING when preserveColumns leaves no column left to update', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, is_dirty INTEGER)');
+      await adapter.run('INSERT INTO assistants (id, is_dirty) VALUES (1, 1)');
+
+      const tableWithPreserve: UpsertTableConfig = {
+        name: 'assistants',
+        strategy: 'upsert',
+        columns: ['id', 'is_dirty'],
+        primaryKey: 'id',
+        preserveColumns: ['is_dirty'],
+      };
+
+      let sqls: string[] = [];
+      await adapter.runInTransaction(exec => {
+        const recording = recordingExec(exec);
+        sqls = recording.sqls;
+        return applyUpsert(recording.exec, tableWithPreserve, [{ id: 1, is_dirty: 0 }]);
+      });
+
+      const insertSql = sqls.find(sql => sql.startsWith('INSERT'));
+      expect(insertSql).toMatch(/DO NOTHING/);
+
+      const { rows } = await adapter.run('SELECT id, is_dirty FROM assistants');
+      expect(rows).toEqual([{ id: 1, is_dirty: 1 }]);
+    });
+  });
 });

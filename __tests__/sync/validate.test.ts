@@ -154,4 +154,67 @@ describe('validateSyncTables', () => {
       ).toThrow(/assistants.*deletedAtColumn.*primaryKey/s);
     });
   });
+
+  describe('preserveColumns', () => {
+    it('throws a descriptive error when a preserveColumns entry is not included in columns', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'upsert',
+            columns: ['id', 'name'],
+            primaryKey: 'id',
+            preserveColumns: ['is_dirty'],
+          },
+        ])
+      ).toThrow(/assistants.*preserveColumns/s);
+    });
+
+    it('returns a normalized config carrying preserveColumns when included in columns', () => {
+      const tables = validateSyncTables([
+        {
+          name: 'assistants',
+          strategy: 'upsert',
+          columns: ['id', 'name', 'is_dirty'],
+          primaryKey: 'id',
+          preserveColumns: ['is_dirty'],
+        },
+      ]);
+      expect(tables[0]).toMatchObject({ preserveColumns: ['is_dirty'] });
+    });
+
+    it('rejects an invalid identifier in preserveColumns', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'upsert',
+            columns: ['id', 'name'],
+            primaryKey: 'id',
+            preserveColumns: ['is dirty'],
+          },
+        ])
+      ).toThrow(/preserveColumns/);
+    });
+
+    it('does not include preserveColumns in the normalized config when absent', () => {
+      const tables = validateSyncTables([
+        { name: 'assistants', strategy: 'upsert', columns: ['id', 'name'], primaryKey: 'id' },
+      ]);
+      expect('preserveColumns' in tables[0]).toBe(false);
+    });
+
+    it('rejects preserveColumns on a replace-strategy table', () => {
+      expect(() =>
+        validateSyncTables([
+          {
+            name: 'assistants',
+            strategy: 'replace',
+            columns: ['id', 'name', 'is_dirty'],
+            preserveColumns: ['is_dirty'],
+          },
+        ])
+      ).toThrow(/assistants.*preserveColumns.*replace/s);
+    });
+  });
 });
