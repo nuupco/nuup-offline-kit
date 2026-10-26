@@ -1,7 +1,7 @@
 import { createFakeExpoSqliteDb } from '../helpers/fake-expo-sqlite';
 import { createExpoSqliteAdapter } from '../../src/adapters/expo-sqlite';
 import { createSyncEngine } from '../../src/sync/engine';
-import { DEFAULT_SYNC_STATE_TABLE } from '../../src/sync/state';
+import { DEFAULT_SYNC_STATE_TABLE, readAllSyncState } from '../../src/sync/state';
 import type { RemoteSource, TableConfig } from '../../src/types';
 
 function makeAdapter() {
@@ -780,6 +780,96 @@ describe('createSyncEngine', () => {
         `SELECT name FROM sqlite_master WHERE type='table' AND name = 'assistants__shadow'`
       );
       expect(leftoverShadow).toHaveLength(0);
+    });
+    it('checkpoints the cursor after each page instead of only at the end, so a mid-stream failure keeps already-applied pages reflected', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const remote: RemoteSource = {
+        async fetch() {
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { rows: [{ id: 1, name: 'alice' }], cursor: 'page-1' };
+              yield { rows: [{ id: 2, name: 'bob' }], cursor: 'page-2' };
+              throw new Error('page 3 fetch failed');
+            },
+          };
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await expect(engine.syncTable('assistants')).rejects.toThrow('page 3 fetch failed');
+
+      // Pages 1 and 2 were already committed to the target table...
+      const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+      expect(rows).toEqual([
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'bob' },
+      ]);
+
+      // ...and the cursor must reflect that, NOT the pre-sync cursor (null),
+      // otherwise the next sync re-fetches and re-applies pages 1-2.
+      const state = await readAllSyncState(adapter, DEFAULT_SYNC_STATE_TABLE);
+      expect(state.get('assistants')?.cursor).toBe('page-2');
+      expect(state.get('assistants')?.rowCount).toBe(2);
+    });
+
+    it('checkpoints a page with zero applicable rows without rolling the cursor back on a later failure', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const remote: RemoteSource = {
+        async fetch() {
+          return {
+            async *[Symbol.asyncIterator]() {
+              yield { rows: [], cursor: 'page-1-empty' };
+              throw new Error('page 2 fetch failed');
+            },
+          };
+        },
+      };
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      await expect(engine.syncTable('assistants')).rejects.toThrow('page 2 fetch failed');
+
+      const state = await readAllSyncState(adapter, DEFAULT_SYNC_STATE_TABLE);
+      expect(state.get('assistants')?.cursor).toBe('page-1-empty');
+      expect(state.get('assistants')?.rowCount).toBe(0);
+    });
+
+    it('happy path (no failures): final cursor and counts are identical to a single end-of-sync checkpoint', async () => {
+      const adapter = makeAdapter();
+      await adapter.run('CREATE TABLE assistants (id INTEGER PRIMARY KEY, name TEXT)');
+
+      const remote = pagedRemote([
+        { rows: [{ id: 1, name: 'alice' }], cursor: 'page-1' },
+        { rows: [{ id: 2, name: 'bob' }] }, // no cursor reported — must not wipe page-1
+        { rows: [{ id: 3, name: 'carol' }], cursor: 'page-3' },
+      ]);
+
+      const engine = createSyncEngine({ adapter, remote, tables });
+      const result = await engine.syncTable('assistants');
+
+      expect(result).toEqual({
+        table: 'assistants',
+        strategy: 'upsert',
+        count: 3,
+        skipped: 0,
+        upserts: 3,
+        deletes: 0,
+        syncedAt: expect.any(String),
+      });
+
+      const state = await readAllSyncState(adapter, DEFAULT_SYNC_STATE_TABLE);
+      expect(state.get('assistants')?.cursor).toBe('page-3');
+      expect(state.get('assistants')?.rowCount).toBe(3);
+
+      const { rows } = await adapter.run('SELECT id, name FROM assistants ORDER BY id');
+      expect(rows).toEqual([
+        { id: 1, name: 'alice' },
+        { id: 2, name: 'bob' },
+        { id: 3, name: 'carol' },
+      ]);
     });
   });
 

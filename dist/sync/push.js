@@ -19,6 +19,7 @@ function rowToMutation(row) {
         status: row.status,
         attempts: Number(row.attempts),
         nextAttemptAt: row.next_attempt_at ?? null,
+        orphaned: Boolean(Number(row.orphaned ?? 0)),
     };
 }
 async function ensurePushOutboxTable(adapter, pushStateTable) {
@@ -33,6 +34,7 @@ async function ensurePushOutboxTable(adapter, pushStateTable) {
       next_attempt_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )`);
+    await adapter.run(`CREATE INDEX IF NOT EXISTS ${pushStateTable}_status_next_attempt_idx ON ${pushStateTable} (status, next_attempt_at)`);
 }
 /**
  * Known limitations:
@@ -70,7 +72,10 @@ function createPushEngine({ adapter, pushStateTable = exports.DEFAULT_PUSH_OUTBO
     }
     async function listByStatus(status) {
         await ensureBootstrap();
-        const { rows } = await adapter.run(`SELECT * FROM ${pushStateTable} WHERE status = ?`, [status]);
+        const { rows } = await adapter.run(`SELECT o.*, (o.depends_on IS NOT NULL AND d.id IS NULL) AS orphaned
+       FROM ${pushStateTable} o
+       LEFT JOIN ${pushStateTable} d ON d.id = o.depends_on
+       WHERE o.status = ?`, [status]);
         return rows.map(rowToMutation);
     }
     async function getQueueState() {
@@ -99,6 +104,25 @@ function createPushEngine({ adapter, pushStateTable = exports.DEFAULT_PUSH_OUTBO
         const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
         await exec(`UPDATE ${pushStateTable} SET status = 'pending', attempts = ?, next_attempt_at = ? WHERE id = ?`, [attempts, nextAttemptAt, id]);
         return 'pending';
+    }
+    async function resetStuckInFlight() {
+        await ensureBootstrap();
+        const { rowsAffected } = await adapter.run(`UPDATE ${pushStateTable} SET status = 'pending' WHERE status = 'in_flight'`);
+        return rowsAffected;
+    }
+    async function requeueFailed(id) {
+        await ensureBootstrap();
+        if (id !== undefined) {
+            const { rowsAffected } = await adapter.run(`UPDATE ${pushStateTable} SET status = 'pending', attempts = 0, next_attempt_at = NULL WHERE id = ? AND status = 'failed'`, [id]);
+            return rowsAffected;
+        }
+        const { rowsAffected } = await adapter.run(`UPDATE ${pushStateTable} SET status = 'pending', attempts = 0, next_attempt_at = NULL WHERE status = 'failed'`);
+        return rowsAffected;
+    }
+    async function cancel(id) {
+        await ensureBootstrap();
+        const { rowsAffected } = await adapter.run(`DELETE FROM ${pushStateTable} WHERE id = ? AND status IN ('pending', 'failed')`, [id]);
+        return rowsAffected > 0;
     }
     async function processQueue({ send }) {
         await ensureBootstrap();
@@ -136,6 +160,6 @@ function createPushEngine({ adapter, pushStateTable = exports.DEFAULT_PUSH_OUTBO
             }
         }
     }
-    return { enqueue, processQueue, listByStatus, getQueueState };
+    return { enqueue, processQueue, listByStatus, getQueueState, resetStuckInFlight, requeueFailed, cancel };
 }
 //# sourceMappingURL=push.js.map

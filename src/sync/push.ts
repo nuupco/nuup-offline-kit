@@ -25,6 +25,8 @@ export interface PushMutation {
   status: PushMutationStatus;
   attempts: number;
   nextAttemptAt: string | null;
+  /** True when `dependsOn` points to an id that was never enqueued. */
+  orphaned: boolean;
 }
 
 export interface PushQueueState {
@@ -60,6 +62,12 @@ export interface PushEngine {
   processQueue(args: { send: PushSend }): Promise<void>;
   listByStatus(status: PushMutationStatus): Promise<PushMutation[]>;
   getQueueState(): Promise<PushQueueState>;
+  /** Resets all `in_flight` mutations back to `pending` (recovery from a crash mid-push). Returns the number of rows affected. */
+  resetStuckInFlight(): Promise<number>;
+  /** Requeues `failed` mutations as `pending` (attempts/next_attempt_at reset). With `id`, requeues only that mutation (must be `failed`, else a no-op). Without `id`, requeues all `failed` mutations. Returns the number of rows affected. */
+  requeueFailed(id?: string): Promise<number>;
+  /** Cancels (deletes) a `pending` or `failed` mutation. Returns `false` (no-op) for `in_flight`/`done`/unknown ids. */
+  cancel(id: string): Promise<boolean>;
 }
 
 function defaultBackoff(baseDelayMs: number, maxBackoffMs: number) {
@@ -75,6 +83,7 @@ function rowToMutation(row: Record<string, unknown>): PushMutation {
     status: row.status as PushMutationStatus,
     attempts: Number(row.attempts),
     nextAttemptAt: (row.next_attempt_at as string | null) ?? null,
+    orphaned: Boolean(Number(row.orphaned ?? 0)),
   };
 }
 
@@ -91,6 +100,9 @@ export async function ensurePushOutboxTable(adapter: Adapter, pushStateTable: st
       next_attempt_at TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     )`
+  );
+  await adapter.run(
+    `CREATE INDEX IF NOT EXISTS ${pushStateTable}_status_next_attempt_idx ON ${pushStateTable} (status, next_attempt_at)`
   );
 }
 
@@ -144,7 +156,13 @@ export function createPushEngine({
 
   async function listByStatus(status: PushMutationStatus): Promise<PushMutation[]> {
     await ensureBootstrap();
-    const { rows } = await adapter.run(`SELECT * FROM ${pushStateTable} WHERE status = ?`, [status]);
+    const { rows } = await adapter.run(
+      `SELECT o.*, (o.depends_on IS NOT NULL AND d.id IS NULL) AS orphaned
+       FROM ${pushStateTable} o
+       LEFT JOIN ${pushStateTable} d ON d.id = o.depends_on
+       WHERE o.status = ?`,
+      [status]
+    );
     return rows.map(rowToMutation);
   }
 
@@ -187,6 +205,38 @@ export function createPushEngine({
     return 'pending';
   }
 
+  async function resetStuckInFlight(): Promise<number> {
+    await ensureBootstrap();
+    const { rowsAffected } = await adapter.run(
+      `UPDATE ${pushStateTable} SET status = 'pending' WHERE status = 'in_flight'`
+    );
+    return rowsAffected;
+  }
+
+  async function requeueFailed(id?: string): Promise<number> {
+    await ensureBootstrap();
+    if (id !== undefined) {
+      const { rowsAffected } = await adapter.run(
+        `UPDATE ${pushStateTable} SET status = 'pending', attempts = 0, next_attempt_at = NULL WHERE id = ? AND status = 'failed'`,
+        [id]
+      );
+      return rowsAffected;
+    }
+    const { rowsAffected } = await adapter.run(
+      `UPDATE ${pushStateTable} SET status = 'pending', attempts = 0, next_attempt_at = NULL WHERE status = 'failed'`
+    );
+    return rowsAffected;
+  }
+
+  async function cancel(id: string): Promise<boolean> {
+    await ensureBootstrap();
+    const { rowsAffected } = await adapter.run(
+      `DELETE FROM ${pushStateTable} WHERE id = ? AND status IN ('pending', 'failed')`,
+      [id]
+    );
+    return rowsAffected > 0;
+  }
+
   async function processQueue({ send }: { send: PushSend }): Promise<void> {
     await ensureBootstrap();
     const now = new Date().toISOString();
@@ -227,5 +277,5 @@ export function createPushEngine({
     }
   }
 
-  return { enqueue, processQueue, listByStatus, getQueueState };
+  return { enqueue, processQueue, listByStatus, getQueueState, resetStuckInFlight, requeueFailed, cancel };
 }

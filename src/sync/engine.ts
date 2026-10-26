@@ -90,9 +90,14 @@ export function createSyncEngine({
   //
   // `fetched` may be a single page or an async sequence of pages (S5b): each
   // page is filtered/chunked/applied incrementally as it arrives, instead of
-  // buffering every row in memory first. The final sync-state write uses the
-  // cursor from the LAST page that reported one (earlier pages' cursors are
-  // superseded), and keeps the previously-known cursor if no page reports one.
+  // buffering every row in memory first. The cursor is checkpointed to
+  // sync-state after EACH page's last batch commits (in the same
+  // transaction), not only once at the end: if a later page's fetch throws
+  // mid-iteration, already-applied pages stay reflected in the persisted
+  // cursor instead of being silently re-fetched and re-applied on the next
+  // sync. The cursor used at each checkpoint is the LAST one reported so far
+  // (earlier pages' cursors are superseded), keeping the previously-known
+  // cursor if no page reports one.
   async function syncUpsertTable(
     table: UpsertTableConfig,
     name: string,
@@ -125,9 +130,20 @@ export function createSyncEngine({
         }
         batchIndex += 1;
       }
+
+      // Checkpoint the cursor once this page's batches have ALL committed
+      // (or immediately, in its own transaction, if the page had zero
+      // applicable rows and so produced no batches) — not once per batch.
+      // This is what makes an error on a LATER page leave already-applied
+      // pages reflected in the persisted cursor, while keeping a single
+      // (non-paginated) page's behavior identical to before: one page means
+      // one checkpoint, written at the same point the old code wrote its
+      // single end-of-sync checkpoint. If a batch within this page throws,
+      // this line is never reached, so (as before) no watermark is written
+      // for a page that didn't fully commit.
+      await adapter.runInTransaction(exec => recordSyncState(exec, syncStateTable, name, count, cursor));
     }
 
-    await adapter.runInTransaction(exec => recordSyncState(exec, syncStateTable, name, count, cursor));
     return { count, skipped, upserts, deletes, cursor };
   }
 
