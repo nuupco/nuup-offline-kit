@@ -35,6 +35,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (auto-created via `ensurePushOutboxTable`), since `processQueue` filters on
   both columns on every cycle.
 
+### Fixed
+
+- Incremental pull: the sync cursor and row count for an `upsert` table are
+  now persisted after each page of a paginated (async-iterable) `fetch`, not
+  only once at the end. Previously, if the iterable threw partway through
+  (e.g. a network error), already-applied earlier pages left no updated
+  cursor, so the next sync would re-fetch and redundantly re-apply them
+  (harmless since `upsert` is idempotent, but wasteful for long pulls
+  interrupted often). Non-paginated and `replace`-strategy syncs are
+  unaffected. Note: `getSyncState()` called concurrently with an in-progress
+  `sync()` may now observe an intermediate cursor instead of only the
+  pre-sync or final one — expected and benign given the adapter's single,
+  sequential connection.
+
 ## [0.5.0]
 
 ### Added
