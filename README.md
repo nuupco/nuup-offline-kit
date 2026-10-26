@@ -9,17 +9,17 @@ Offline-first toolkit for React Native/Expo apps: SQLite migrations, a pull-only
 Install from a tagged release, pinned to that tag — never from `main`, since a later push there could change the API under your app without warning:
 
 ```sh
-npm install github:nuupco/nuup-offline-kit#v0.4.0 expo-sqlite
+npm install github:nuupco/nuup-offline-kit#v0.6.0 expo-sqlite
 ```
 
 Yarn / pnpm use the same `github:` spec:
 
 ```sh
-yarn add github:nuupco/nuup-offline-kit#v0.4.0 expo-sqlite
-pnpm add github:nuupco/nuup-offline-kit#v0.4.0 expo-sqlite
+yarn add github:nuupco/nuup-offline-kit#v0.6.0 expo-sqlite
+pnpm add github:nuupco/nuup-offline-kit#v0.6.0 expo-sqlite
 ```
 
-To bump the version later, update the `#v0.4.0` tag reference to the new tag and reinstall. See [Releasing a new tag](#releasing-a-new-tag) for how new tags get cut.
+To bump the version later, update the `#v0.6.0` tag reference to the new tag and reinstall. See [Releasing a new tag](#releasing-a-new-tag) for how new tags get cut.
 
 Once published to npm:
 
