@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_MAX_BACKOFF_MS = exports.DEFAULT_MAX_ATTEMPTS = exports.DEFAULT_PUSH_OUTBOX_TABLE = exports.ensurePushOutboxTable = exports.createPushEngine = exports.validateSyncTables = exports.assertIdentifier = exports.IDENTIFIER_RE = exports.applyUpsert = exports.applyReplace = exports.chunk = exports.readAllSyncState = exports.readSyncState = exports.recordSyncState = exports.ensureSyncStateTable = exports.DEFAULT_SYNC_STATE_TABLE = exports.createSyncEngine = void 0;
+exports.DEFAULT_MAX_BACKOFF_MS = exports.DEFAULT_MAX_ATTEMPTS = exports.DEFAULT_PUSH_OUTBOX_TABLE = exports.ensurePushOutboxTable = exports.createPushEngine = exports.validateSyncTables = exports.assertIdentifier = exports.IDENTIFIER_RE = exports.applyUpsert = exports.applyReplaceShadow = exports.applyReplace = exports.chunk = exports.readAllSyncState = exports.readSyncState = exports.recordSyncState = exports.ensureSyncStateTable = exports.DEFAULT_SYNC_STATE_TABLE = exports.createSyncEngine = void 0;
 var engine_1 = require("./engine");
 Object.defineProperty(exports, "createSyncEngine", { enumerable: true, get: function () { return engine_1.createSyncEngine; } });
 var state_1 = require("./state");
@@ -12,6 +12,7 @@ Object.defineProperty(exports, "readAllSyncState", { enumerable: true, get: func
 var apply_1 = require("./apply");
 Object.defineProperty(exports, "chunk", { enumerable: true, get: function () { return apply_1.chunk; } });
 Object.defineProperty(exports, "applyReplace", { enumerable: true, get: function () { return apply_1.applyReplace; } });
+Object.defineProperty(exports, "applyReplaceShadow", { enumerable: true, get: function () { return apply_1.applyReplaceShadow; } });
 Object.defineProperty(exports, "applyUpsert", { enumerable: true, get: function () { return apply_1.applyUpsert; } });
 var validate_1 = require("./validate");
 Object.defineProperty(exports, "IDENTIFIER_RE", { enumerable: true, get: function () { return validate_1.IDENTIFIER_RE; } });

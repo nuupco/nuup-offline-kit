@@ -20,6 +20,8 @@ export interface PushMutation {
     status: PushMutationStatus;
     attempts: number;
     nextAttemptAt: string | null;
+    /** True when `dependsOn` points to an id that was never enqueued. */
+    orphaned: boolean;
 }
 export interface PushQueueState {
     pending: number;
@@ -52,6 +54,12 @@ export interface PushEngine {
     }): Promise<void>;
     listByStatus(status: PushMutationStatus): Promise<PushMutation[]>;
     getQueueState(): Promise<PushQueueState>;
+    /** Resets all `in_flight` mutations back to `pending` (recovery from a crash mid-push). Returns the number of rows affected. */
+    resetStuckInFlight(): Promise<number>;
+    /** Requeues `failed` mutations as `pending` (attempts/next_attempt_at reset). With `id`, requeues only that mutation (must be `failed`, else a no-op). Without `id`, requeues all `failed` mutations. Returns the number of rows affected. */
+    requeueFailed(id?: string): Promise<number>;
+    /** Cancels (deletes) a `pending` or `failed` mutation. Returns `false` (no-op) for `in_flight`/`done`/unknown ids. */
+    cancel(id: string): Promise<boolean>;
 }
 export declare function ensurePushOutboxTable(adapter: Adapter, pushStateTable: string): Promise<void>;
 /**
